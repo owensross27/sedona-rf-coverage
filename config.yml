@@ -91,6 +91,30 @@ clutter:
   95: 2.0    # mangroves (not present in WV; listed for completeness)
   100: 0.0   # moss and lichen
 
+buildings:
+  # ADDED 2026-08-10, AFTER first results existed -- recorded per the
+  # pre-registration notice above. Forcing measurement: Overture buildings
+  # carry `height` on 74.2% of the 4,550,373 WV footprints (73.3% in the demo
+  # box, median 3.55 m, measured 2026-08-09/10), so modelling the receiver
+  # obstruction with the actual building height replaces a flat constant with
+  # physics the data supports. The class-based baseline is retained: a run
+  # without the building layer reproduces it bit for bit
+  # (test_no_building_layer_reproduces_the_baseline_exactly), and
+  # docs/validation.md reports both. Validation that this is a refinement and
+  # not a re-tune: the median building evaluates to 14.8 dB against the
+  # pre-registered 15.0 dB built-up constant.
+  #
+  # Receiver stands half a street width behind the rooftop knife edge.
+  setback_m: 15.0
+  # Single-edge loss is capped where the model stops being honest: real
+  # streets are filled in by reflections a single ray cannot see, and
+  # COST-231's rooftop-to-street term tops out near 25-30 dB.
+  max_loss_db: 30.0
+  # Footprints with no height tag (26.7% in the demo box) get the height of a
+  # modest single-storey structure rather than being dropped: absence of a tag
+  # is not absence of a building.
+  default_height_m: 5.0
+
 grid:
   # H3 resolution 8 (~0.74 km^2, ~930 m across) for receivers. Finer would be
   # false precision: the 8 dB shadow-fading margin already exceeds what r9

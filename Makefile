@@ -46,7 +46,7 @@ demo:
 pipeline:
 	source scripts/java_env.sh; set -e; \
 	if [ -f .env ]; then set -a; . ./.env; set +a; fi; \
-	for s in 01_towers 02_terrain 03_census 04_grid 05_links 06_coverage 07_dq 09_siting; do \
+	for s in 01_towers 02_terrain 03_census 04_grid 05_links 06_coverage 07_dq 08_features 09_siting; do \
 	  echo "== $$s"; SCOPE=$(SCOPE) $(VENV)/python src/$$s.py; \
 	done
 
@@ -63,6 +63,7 @@ smoke:
 # cluster deleted, so it reads gold/ with pandas and never starts Spark.
 map:
 	SCOPE=$(SCOPE) LOCAL_OUT=$${LOCAL_OUT:-1} $(VENV)/python scripts/make_map.py
+	SCOPE=$(SCOPE) LOCAL_OUT=$${LOCAL_OUT:-1} $(VENV)/python scripts/make_figures.py
 
 tiles:
 	bash scripts/make_tiles.sh

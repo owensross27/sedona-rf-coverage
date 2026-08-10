@@ -83,6 +83,45 @@ def knife_edge_loss_db(v: np.ndarray) -> np.ndarray:
     return np.maximum(out, 0.0)
 
 
+def building_loss_db(
+    h_bldg_m: np.ndarray,
+    rx_height_m: float,
+    freq_mhz: float,
+    setback_m: float,
+    max_loss_db: float,
+) -> np.ndarray:
+    """Rooftop-to-street excess loss from a building at the receiver pixel.
+
+    The receiver stands a street's half-width behind a building of height h;
+    the rooftop is a single knife edge close to the receiver. With the edge at
+    distance w and the transmitter effectively at infinity, the Fresnel
+    parameter collapses to
+
+        v = (h - h_rx) * sqrt(2 / (lambda * w))
+
+    and the loss is the same ITU-R P.526 J(v) the terrain model already uses.
+    One physics, two obstruction sources.
+
+    Two deliberate boundaries on the claim:
+
+    * Loss is CAPPED (max_loss_db). A single-edge model of a 90 m tower block
+      predicts ~45 dB of street shadow, but real streets are filled in by
+      reflections and multipath the single ray cannot see; COST-231's
+      rooftop-to-street term tops out near 25-30 dB for the same geometry.
+      Past the cap the model would be claiming precision it does not have.
+    * The DSM already contains large buildings, so a downtown tower can be
+      counted once as terrain and once here. At 90 m posting with bilinear
+      resampling the DSM effectively loses ordinary houses (median WV
+      building: 3.55 m), which is exactly the population this term exists to
+      cover; the overlap on tall structures is bounded by the cap and stated
+      in docs/validation.md rather than hidden.
+    """
+    dh = np.asarray(h_bldg_m, dtype=np.float64) - rx_height_m
+    wavelength_m = 299.792458 / freq_mhz
+    v = np.where(dh > 0.0, dh * np.sqrt(2.0 / (wavelength_m * setback_m)), V_CLEAR)
+    return np.minimum(knife_edge_loss_db(v), max_loss_db)
+
+
 @dataclass(frozen=True)
 class TerrainGrid:
     """A DEM and a co-registered clutter raster sharing one affine transform.
@@ -100,6 +139,10 @@ class TerrainGrid:
     y0: float
     cell_m: float
     clutter_lut: np.ndarray    # (256,) float, class code -> excess loss dB
+    # Building heights on the same grid, metres AGL, 0 = no building. Optional
+    # because the demo must run before the (slow, remote) Overture scan has
+    # ever happened; None reproduces the flat class-based clutter exactly.
+    bldg: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         if self.dem.shape != self.clutter.shape:
@@ -107,6 +150,17 @@ class TerrainGrid:
                 f"dem {self.dem.shape} and clutter {self.clutter.shape} must "
                 "share a grid; reproject them together in 02_terrain.py"
             )
+        if self.bldg is not None and self.bldg.shape != self.dem.shape:
+            raise ValueError(
+                f"buildings {self.bldg.shape} not on the dem grid "
+                f"{self.dem.shape}; 02_terrain.py writes all three together"
+            )
+
+    def _index(self, x: np.ndarray, y: np.ndarray):
+        rows, cols = self.dem.shape
+        c = np.clip(np.rint((x - self.x0) / self.cell_m).astype(np.int64), 0, cols - 1)
+        r = np.clip(np.rint((self.y0 - y) / self.cell_m).astype(np.int64), 0, rows - 1)
+        return r, c
 
     def sample(self, x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Nearest-neighbour sample of (dem, clutter) at projected coords.
@@ -115,10 +169,15 @@ class TerrainGrid:
         path can legitimately clip the state boundary, and the alternative is
         dropping the whole link.
         """
-        rows, cols = self.dem.shape
-        c = np.clip(np.rint((x - self.x0) / self.cell_m).astype(np.int64), 0, cols - 1)
-        r = np.clip(np.rint((self.y0 - y) / self.cell_m).astype(np.int64), 0, rows - 1)
+        r, c = self._index(x, y)
         return self.dem[r, c], self.clutter[r, c]
+
+    def sample_bldg(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+        """Building height AGL at projected coords; zeros when no layer."""
+        if self.bldg is None:
+            return np.zeros(np.shape(x), dtype=np.float64)
+        r, c = self._index(x, y)
+        return self.bldg[r, c].astype(np.float64)
 
 
 def _profile(grid: TerrainGrid, tx_x, tx_y, rx_x, rx_y, n_samples: int):
@@ -263,12 +322,21 @@ def link_rsrp(
     shadow_margin_db: float,
     n_samples: int,
     k_factor: float,
+    bldg_setback_m: float = 15.0,
+    bldg_max_loss_db: float = 30.0,
 ) -> dict[str, np.ndarray]:
     """Predicted RSRP for a batch of transmitter/receiver pairs.
 
     Every argument beyond the grid is an array of length N (or a scalar that
     applies to all N). Returns a dict of length-N arrays, which is the shape
     05_links.py hands straight back to Spark as pandas Series.
+
+    Receiver clutter is the MAX of the class-based value and the
+    building-height knife edge, never the sum: they describe the same
+    obstruction (whatever is standing next to the receiver), and the taller
+    description wins. With no building layer on the grid the max degenerates
+    to the class LUT and this function reproduces the pre-registered baseline
+    bit for bit.
     """
     tx_x, tx_y = np.asarray(tx_x, float), np.asarray(tx_y, float)
     rx_x, rx_y = np.asarray(rx_x, float), np.asarray(rx_y, float)
@@ -288,7 +356,9 @@ def link_rsrp(
         elev, path_len_m, z_tx, z_rx, freq_mhz, k_factor
     )
     _, rx_class = grid.sample(rx_x, rx_y)
-    l_clutter = grid.clutter_lut[rx_class]
+    l_bldg = building_loss_db(grid.sample_bldg(rx_x, rx_y), rx_height_m,
+                              freq_mhz, bldg_setback_m, bldg_max_loss_db)
+    l_clutter = np.maximum(grid.clutter_lut[rx_class], l_bldg)
 
     rsrp = (
         eirp_dbm

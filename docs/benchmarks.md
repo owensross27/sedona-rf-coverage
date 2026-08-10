@@ -44,6 +44,37 @@ What it is spent on instead: running the pipeline at 30 m / r9 as a
 *sensitivity check*, to demonstrate the conclusions do not move. That is a
 validation artifact rather than a resolution upgrade.
 
+## Sedona tiled raster analytics (stage 08)
+
+`SCOPE=demo LOCAL_OUT=1 python src/08_features.py`, Apple M4, local Spark on
+4 cores, 2026-08-10.
+
+| Metric | Measured |
+|---|---|
+| Zonal plan: 5 tiled rasters x 3,345 hexes | 18.9 s |
+| Plan shape | RS_TileExplode(512) -> RS_Intersects join -> RS_ZonalStatsAll -> combinable aggregation |
+| Independent rasterio recompute of a 3-hex sample | agrees (asserted every run) |
+| Gap-mask COG, RS_MapAlgebra -> RS_AsCOG | pixel-identical to the numpy derivation (95,011 = 95,011 gap pixels) |
+
+This is the deliberate counterpart to the kernel benchmark above: thousands
+of zonal questions run as tiled raster SQL inside Sedona, while hundreds of
+millions of point samples run on broadcast numpy arrays. Right tool at each
+scale, each choice carrying its measurement.
+
+## Overture buildings scan (stage 02)
+
+duckdb + httpfs over the open bucket, bbox row-group pruning only, no spatial
+extension. Demo padded box (1.65 x 1.37 degrees), 2026-08-10.
+
+| Metric | Measured |
+|---|---|
+| Buildings returned | 526,084 (stage box) / 426,270 (probe box) |
+| Wall clock, cold | 187 s |
+| `height` tagged | 73.2-73.3% |
+| Burned onto the 90 m grid | 413,383 footprints -> 178,192 pixels (6.9% of grid) |
+
+Cached under `data/raw/` after the first run; reruns are local.
+
 ## Fallbacks not needed
 
 The build plan carried three staged fallbacks in case the kernel missed its
@@ -59,6 +90,5 @@ These rows are intentionally empty until a real run fills them; see
 | Metric | Status |
 |---|---|
 | `RS_Value` per-sample vs broadcast-array kernel | not yet measured |
-| Overture buildings bbox row-group pruning, global -> WV | not yet measured |
 | End-to-end pipeline wall clock, SCOPE=state on EKS | not yet measured |
 | EKS spot node-hours and total AWS spend | not yet measured |

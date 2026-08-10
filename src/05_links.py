@@ -26,7 +26,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from config import GRID, RF, clutter_loss_lut, scope  # noqa: E402
+from config import BUILDINGS, GRID, RF, clutter_loss_lut, scope  # noqa: E402
 from propagation import TerrainGrid, link_rsrp  # noqa: E402
 from session import assert_versions, get_sedona, out_path  # noqa: E402
 from sources import gdal_path  # noqa: E402
@@ -46,13 +46,19 @@ OUT_COLS = [
 OUT_SCHEMA = ", ".join(f"{n} {t}" for n, t in OUT_COLS)
 
 
-def load_terrain(dem_path: str, clutter_path: str) -> TerrainGrid:
-    """Read the two co-registered COGs into memory on the driver.
+def load_terrain(dem_path: str, clutter_path: str,
+                 bldg_path: str | None = None) -> TerrainGrid:
+    """Read the co-registered COGs into memory on the driver.
 
-    02_terrain.py has already put both on the same EPSG:5070 grid, which is
-    what makes a single set of pixel indices valid for both. That is asserted
-    here rather than trusted: a silent half-pixel offset between terrain and
-    clutter would be invisible in the output map.
+    02_terrain.py has already put all layers on the same EPSG:5070 grid, which
+    is what makes a single set of pixel indices valid for every one of them.
+    That is asserted here rather than trusted: a silent half-pixel offset
+    between layers would be invisible in the output map.
+
+    The building layer is optional two ways: pass None to run the
+    pre-registered class-only baseline deliberately (BUILDING_CLUTTER=0 in
+    main), or point at a file that does not exist yet and get a loud error --
+    a missing layer must never silently degrade into the baseline.
     """
     import rasterio
 
@@ -70,6 +76,15 @@ def load_terrain(dem_path: str, clutter_path: str) -> TerrainGrid:
                 f"clutter transform {src.transform} != dem transform {transform}; "
                 "re-run 02_terrain.py, which reprojects both onto one grid"
             )
+    bldg = None
+    if bldg_path is not None:
+        with rasterio.open(gdal_path(bldg_path)) as src:
+            bldg = src.read(1).astype(np.uint8)
+            if src.transform != transform:
+                raise RuntimeError(
+                    f"buildings transform {src.transform} != dem {transform}; "
+                    "re-run 02_terrain.py, which writes all three together"
+                )
     if crs.to_epsg() != GRID["crs"]:
         raise RuntimeError(f"terrain is EPSG:{crs.to_epsg()}, expected {GRID['crs']}")
 
@@ -83,6 +98,7 @@ def load_terrain(dem_path: str, clutter_path: str) -> TerrainGrid:
         y0=transform.f - cell / 2.0,
         cell_m=float(cell),
         clutter_lut=np.asarray(clutter_loss_lut(), dtype=np.float64),
+        bldg=bldg,
     )
 
 
@@ -94,6 +110,10 @@ def make_kernel(bcast):
     is no per-core copy, which is the whole reason a 61 MB payload is fine.
     """
     rf = dict(RF)
+    # The building knife-edge parameters ride in the same closure dict so the
+    # kernel serialises one plain dict, not a config module reference.
+    rf["bldg_setback_m"] = float(BUILDINGS["setback_m"])
+    rf["bldg_max_loss_db"] = float(BUILDINGS["max_loss_db"])
 
     def kernel(batches):
         grid = bcast.value
@@ -114,6 +134,8 @@ def make_kernel(bcast):
                 shadow_margin_db=rf["shadow_margin_db"],
                 n_samples=rf["profile_samples"],
                 k_factor=rf["k_factor"],
+                bldg_setback_m=rf["bldg_setback_m"],
+                bldg_max_loss_db=rf["bldg_max_loss_db"],
             )
             yield pd.DataFrame({
                 "asr_id": df["asr_id"].to_numpy(),
@@ -177,12 +199,19 @@ def main() -> int:
     pairs = pairs.repartition(n_parts)
 
     # ---- the numpy half --------------------------------------------------
+    # BUILDING_CLUTTER=0 runs the pre-registered class-only baseline; it is a
+    # deliberate sensitivity switch, not a fallback -- with it unset, a missing
+    # buildings COG is an error, never a silent model downgrade.
+    use_bldg = os.environ.get("BUILDING_CLUTTER", "1") != "0"
     grid = load_terrain(
         out_path("cog", "dem_5070_90m.tif"),
         out_path("cog", "clutter_5070_90m.tif"),
+        out_path("cog", "buildings_5070_90m.tif") if use_bldg else None,
     )
-    print(f"broadcasting terrain {grid.dem.shape} "
-          f"({(grid.dem.nbytes + grid.clutter.nbytes) / 1e6:.0f} MB)")
+    nbytes = grid.dem.nbytes + grid.clutter.nbytes + (
+        grid.bldg.nbytes if grid.bldg is not None else 0)
+    print(f"clutter model: {'class LUT + building heights' if use_bldg else 'class LUT only (baseline)'}")
+    print(f"broadcasting terrain {grid.dem.shape} ({nbytes / 1e6:.0f} MB)")
     bcast = sedona.sparkContext.broadcast(grid)
 
     links = pairs.mapInPandas(make_kernel(bcast), schema=OUT_SCHEMA)

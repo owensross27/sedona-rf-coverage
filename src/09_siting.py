@@ -36,6 +36,7 @@ Usage:
     SCOPE=demo LOCAL_OUT=1 python src/09_siting.py
 """
 import importlib
+import os
 import sys
 import time
 from pathlib import Path
@@ -326,9 +327,14 @@ def main() -> int:
     print(f"gap cells: {len(gaps):,}, "
           f"{gaps['pop'].sum():,.0f} people, {gaps['demand'].sum():,.0f} demand")
 
+    # Same clutter model as 05, same env switch: an optimizer running richer
+    # physics than the coverage map it optimizes against would recommend sites
+    # for a world the map does not describe.
+    use_bldg = os.environ.get("BUILDING_CLUTTER", "1") != "0"
     grid = links05.load_terrain(
         out_path("cog", "dem_5070_90m.tif"),
         out_path("cog", "clutter_5070_90m.tif"),
+        out_path("cog", "buildings_5070_90m.tif") if use_bldg else None,
     )
     cands = pd.concat([colocation_candidates(sedona, gaps),
                        greenfield_candidates(gaps, grid)], ignore_index=True)

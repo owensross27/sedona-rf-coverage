@@ -112,7 +112,9 @@ def main() -> int:
         f"Sources: FCC ASR, Copernicus GLO-30, ESA WorldCover, ACS, Overture.",
         fontsize=10)
 
-    dest = Path(out_path("gold", "coverage_map.png"))
+    from config import REPO_ROOT
+    dest = REPO_ROOT / "docs" / "img" / "coverage_map.png"
+    dest.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(dest, dpi=140)
     print(f"wrote {dest}")
     return 0

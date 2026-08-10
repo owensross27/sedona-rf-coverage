@@ -29,9 +29,9 @@ from rasterio.warp import Resampling, reproject, transform_bounds
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from config import SOURCES  # noqa: E402
+from config import BUILDINGS, SOURCES, scope  # noqa: E402
 from session import out_path  # noqa: E402
-from sources import aoi, anon_gdal_env, gdal_path, grid_spec, link_pad_m  # noqa: E402
+from sources import RAW_DIR, aoi, anon_gdal_env, gdal_path, grid_spec, link_pad_m  # noqa: E402
 
 DEM_NODATA = -32768.0
 # WorldCover class 0 IS "no data", and clutter_loss_lut() maps 0 to 0 dB. So an
@@ -162,6 +162,77 @@ def _write(path: str, array: np.ndarray, spec: dict, nodata) -> None:
     print(f"wrote {path} {array.shape} {array.dtype}")
 
 
+def building_heights(spec: dict, bounds_4326) -> np.ndarray:
+    """Overture building heights burned onto the shared 90 m grid, metres AGL.
+
+    Third layer on the same lattice, same reasoning as the first two: the
+    propagation kernel reads it with the identical pixel indices, so it must
+    share the transform or be silently wrong everywhere.
+
+    The scan is duckdb over the Overture parquet with bbox row-group pruning
+    (measured: 426k demo-box buildings in ~3 min from a ~257 GB global theme),
+    cached per scope because that is a network cost worth paying once. Burned
+    at the footprint's bbox centre with a per-pixel MAX: a 90 m pixel holding
+    six houses and one church steeple obstructs like the steeple, and mean
+    would water every obstruction down by however much empty lot shares the
+    pixel.
+
+    uint8 metres, capped at 250: the tallest building in WV is 87 m, so the
+    cap documents the dtype rather than ever engaging.
+    """
+    import duckdb
+    import pandas as pd
+    from pyproj import Transformer
+
+    cache = RAW_DIR / f"overture_buildings_{scope()['name']}.parquet"
+    if cache.exists():
+        df = pd.read_parquet(cache)
+        print(f"buildings: {len(df):,} from cache {cache.name}")
+    else:
+        ov = SOURCES["overture"]
+        path = (f"s3://{ov['bucket']}/release/{ov['release']}"
+                "/theme=buildings/type=building/*")
+        con = duckdb.connect()
+        con.execute("INSTALL httpfs; LOAD httpfs; SET s3_region='us-west-2';")
+        minx, miny, maxx, maxy = bounds_4326
+        print(f"buildings: scanning Overture {ov['release']} (first run only)")
+        df = con.execute(f"""
+            SELECT (bbox.xmin + bbox.xmax)/2 AS lng,
+                   (bbox.ymin + bbox.ymax)/2 AS lat,
+                   height
+            FROM read_parquet('{path}')
+            WHERE bbox.xmin BETWEEN ? AND ? AND bbox.ymin BETWEEN ? AND ?
+        """, [minx, maxx, miny, maxy]).df()
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(cache)
+        print(f"buildings: {len(df):,} fetched -> {cache.name}")
+    if df.empty:
+        raise RuntimeError(
+            "Overture returned zero buildings for this extent; the release "
+            "pin has probably lifecycle-expired (see config.yml)"
+        )
+
+    tagged = df["height"].notna().mean()
+    h = df["height"].fillna(float(BUILDINGS["default_height_m"])).to_numpy()
+    print(f"buildings: height tagged on {tagged:.1%}, "
+          f"median {np.median(h):.2f} m, max {h.max():.1f} m")
+
+    to_5070 = Transformer.from_crs(4326, spec["crs"], always_xy=True)
+    x, y = to_5070.transform(df["lng"].to_numpy(), df["lat"].to_numpy())
+    minx5070, _, _, maxy5070 = spec["bounds"]
+    cell = spec["cell_m"]
+    col = np.floor((np.asarray(x) - minx5070) / cell).astype(np.int64)
+    row = np.floor((maxy5070 - np.asarray(y)) / cell).astype(np.int64)
+    ok = ((row >= 0) & (row < spec["height"]) & (col >= 0) & (col < spec["width"]))
+
+    out = np.zeros((spec["height"], spec["width"]), dtype=np.uint8)
+    burned = np.minimum(np.rint(h[ok]), 250.0).astype(np.uint8)
+    np.maximum.at(out, (row[ok], col[ok]), burned)
+    print(f"buildings: {ok.sum():,} burned onto {int((out > 0).sum()):,} pixels "
+          f"({(out > 0).mean():.1%} of the grid)")
+    return out
+
+
 def validate_against_towers(dem: np.ndarray, spec: dict) -> None:
     """Cross-check the DEM against the ASR structures' own ground elevations.
 
@@ -237,10 +308,15 @@ def main() -> int:
     dem_i16 = np.rint(dem).astype(np.int16)
     validate_against_towers(dem_i16, spec)
 
+    bldg = building_heights(spec, b4326)
+
     _write(gdal_path(out_path("cog", "dem_5070_90m.tif")), dem_i16, spec,
            int(np.iinfo(np.int16).min))
     _write(gdal_path(out_path("cog", "clutter_5070_90m.tif")), clutter, spec,
            CLUTTER_NODATA)
+    # nodata 0 = "no building", which is also the value the propagation kernel
+    # treats as zero excess loss -- same convention as the clutter layer.
+    _write(gdal_path(out_path("cog", "buildings_5070_90m.tif")), bldg, spec, 0)
     return 0
 
 

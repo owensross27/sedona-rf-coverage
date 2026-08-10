@@ -294,6 +294,71 @@ def test_diffraction_loss_is_never_negative():
     assert np.all(np.isfinite(loss))
 
 
+def test_building_loss_matches_the_preregistered_builtup_value():
+    """The measured median WV building (3.55 m, Overture 2026-07-22.0) must
+    land NEAR the pre-registered flat 15 dB for built-up pixels -- the two are
+    independent descriptions of the same street, and if the knife-edge
+    geometry put a normal house at 5 dB or 25 dB, either the setback or the
+    formula would be wrong. This is the check that makes swapping a constant
+    for a physical model a refinement rather than a re-tuning."""
+    from propagation import building_loss_db
+    loss = building_loss_db(np.array([3.55]), 1.5, FREQ, 15.0, 30.0)[0]
+    assert 12.0 < loss < 18.0, loss
+
+
+def test_building_loss_boundaries():
+    """Below the receiver: zero, not negative. Monotonic in height. Capped
+    where the single-edge claim stops being honest."""
+    from propagation import building_loss_db
+    h = np.array([0.0, 1.0, 3.0, 8.0, 30.0, 90.0])
+    loss = building_loss_db(h, 1.5, FREQ, 15.0, 30.0)
+    assert loss[0] == 0.0 and loss[1] == 0.0, loss      # below rx head height
+    assert np.all(np.diff(loss) >= 0.0), loss           # taller never helps
+    assert loss[-1] == 30.0, loss                       # cap engaged
+    assert np.all(np.isfinite(loss))
+
+
+def test_no_building_layer_reproduces_the_baseline_exactly():
+    """TerrainGrid without bldg must be bit-identical to the pre-registered
+    class-LUT model -- this is what makes the baseline/variant comparison in
+    docs/validation.md a controlled experiment rather than two codebases."""
+    flat = np.full((64, 64), 200.0, dtype=np.int16)
+    clut = np.full((64, 64), 50, dtype=np.uint8)        # built-up everywhere
+    lut = np.zeros(256); lut[50] = 15.0
+    base = TerrainGrid(dem=flat, clutter=clut, x0=0.0, y0=5670.0,
+                       cell_m=90.0, clutter_lut=lut)
+    withz = TerrainGrid(dem=flat, clutter=clut, x0=0.0, y0=5670.0,
+                        cell_m=90.0, clutter_lut=lut,
+                        bldg=np.zeros((64, 64), dtype=np.uint8))
+    kw = dict(tx_x=np.r_[100.0], tx_y=np.r_[5000.0], tx_height_m=np.r_[50.0],
+              rx_x=np.r_[5000.0], rx_y=np.r_[500.0], rx_height_m=1.5,
+              freq_mhz=FREQ, eirp_dbm=60.0, subcarriers=600,
+              shadow_margin_db=8.0, n_samples=128, k_factor=K)
+    a, b = link_rsrp(base, **kw), link_rsrp(withz, **kw)
+    assert a["rsrp_dbm"][0] == b["rsrp_dbm"][0], (a, b)
+    assert a["clutter_db"][0] == 15.0, a
+
+
+def test_building_taller_than_class_value_dominates_but_never_stacks():
+    """max(), not sum: an 8 m building in a built-up pixel raises clutter to
+    its own knife-edge value; the class 15 dB does not add on top."""
+    from propagation import building_loss_db
+    flat = np.full((64, 64), 200.0, dtype=np.int16)
+    clut = np.full((64, 64), 50, dtype=np.uint8)
+    lut = np.zeros(256); lut[50] = 15.0
+    bldg = np.full((64, 64), 8, dtype=np.uint8)
+    g = TerrainGrid(dem=flat, clutter=clut, x0=0.0, y0=5670.0,
+                    cell_m=90.0, clutter_lut=lut, bldg=bldg)
+    out = link_rsrp(g, tx_x=np.r_[100.0], tx_y=np.r_[5000.0],
+                    tx_height_m=np.r_[50.0], rx_x=np.r_[5000.0],
+                    rx_y=np.r_[500.0], rx_height_m=1.5, freq_mhz=FREQ,
+                    eirp_dbm=60.0, subcarriers=600, shadow_margin_db=8.0,
+                    n_samples=128, k_factor=K)
+    expect = building_loss_db(np.array([8.0]), 1.5, FREQ, 15.0, 30.0)[0]
+    assert expect > 15.0, expect
+    assert abs(out["clutter_db"][0] - expect) < 1e-9, (out["clutter_db"], expect)
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

@@ -16,6 +16,7 @@ CLUTTER = CFG["clutter"]
 GRID = CFG["grid"]
 DEMAND = CFG["demand"]
 SITING = CFG["siting"]
+BUILDINGS = CFG["buildings"]
 DQ = CFG["dq"]
 SOURCES = CFG["sources"]
 
