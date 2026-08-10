@@ -130,7 +130,7 @@ Categories weighted in `config.yml`. CDLA Permissive 2.0.
 
 | Source | Why not |
 |---|---|
-| Overture buildings (`theme=buildings`, 257 GB) | `height` and `num_floors` are sparse, and the WorldCover built-up class already drives the same clutter correction. Kept as a standalone bbox-pruning benchmark, labelled as a demo. |
+| Overture buildings (`theme=buildings`, 257 GB) | Measured over West Virginia on 2026-08-09: **4,550,373 buildings, `height` present on 74.2%** — not sparse, contrary to an earlier note here. `num_floors` really is sparse (0.49%), and `min_height` / `roof_height` are effectively absent (1 and 11 rows statewide). Still not used, but for a measured reason rather than a coverage one: median height is **3.85 m**, so the typical WV building sits far below the 8 dB shadow-fading margin the model already carries, and the WorldCover built-up class drives the same clutter correction more cheaply. The upgrade path is a height-derived clutter term replacing the flat 15 dB built-up value — that would change a pre-registered parameter, so it needs its own justification. Kept as a standalone bbox-pruning benchmark, labelled as a demo. |
 | Meta / WRI canopy height (`s3://dataforgood-fb-data/forests/`) | Within the model's 8 dB shadow margin, and CC BY-NC complicates the licence story. |
 | Microsoft ML building footprints | Azure-hosted, no native S3. |
 | FEMA / ORNL USA Structures | No S3 or cloud-native distribution found; GDB/Shapefile via Figshare and Esri only. |
