@@ -15,13 +15,22 @@ kubeconfig*
 # engineering documentation); CLAUDE.local.md is not.
 CLAUDE.local.md
 
-# terraform: state and any file that could carry the account id or bucket name
+# terraform: state and any file that could carry the account id or bucket name.
+# A saved plan file is state -- it holds every resource attribute in cleartext,
+# and `terraform plan -out` is the easy way to leave one lying in the tree.
+# The negation must come LAST or git re-ignores the example.
 *.tfstate
 *.tfstate.*
 .terraform/
 .terraform.lock.hcl
-terraform.tfvars
-!terraform.tfvars.example
+.terraform.tfstate.lock.info
+*.tfvars
+*.tfvars.json
+tfplan
+*.tfplan
+crash.log
+crash.*.log
+!*.tfvars.example
 
 # build/runtime junk
 __pycache__/

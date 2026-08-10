@@ -1,0 +1,20 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored; this
+# .example file is the only tfvars that is ever committed.
+#
+#   cp terraform.tfvars.example terraform.tfvars
+#   $EDITOR terraform.tfvars
+#   terraform -chdir=infra/terraform init
+#   terraform -chdir=infra/terraform plan     # creates nothing
+#   terraform -chdir=infra/terraform apply    # ~$0: bucket, ECR repo, budget
+
+# REQUIRED, no default. Terraform stops and asks if this is missing, which is
+# the point -- a budget nobody hears from is not a guardrail.
+budget_alert_email = "you@example.com"
+
+# Everything below already defaults to the value the Makefile and
+# infra/eks/cluster.yaml expect. Uncomment only if you change them there too.
+# project            = "rf-coverage"
+# aws_region         = "us-west-2"
+# ecr_repo           = "sedona-rf-coverage"
+# image_retain_count = 3
+# budget_limit_usd   = 20
