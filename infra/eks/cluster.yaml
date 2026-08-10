@@ -1,0 +1,147 @@
+# eksctl cluster spec. Ephemeral by design: created and destroyed on every
+# work session, because the public demo map does not depend on it (see
+# README "Serving"). `make cluster-up` / `make cluster-down`.
+#
+# Terraform owns the durable resources (S3, ECR, ACM, CloudFront, Route53,
+# Budget) -- things created once and destroyed at project end. eksctl owns the
+# cluster, which is created and destroyed repeatedly. Splitting the two by
+# lifetime keeps this file ~60 readable lines instead of an 800-line module
+# invocation plus a state file that is a liability in a public repo.
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: rf-cov
+  # us-west-2, NOT the account's usual us-east-2. Every bulk input bucket
+  # (overturemaps-us-west-2, ookla-open-data, prd-tnm) lives here, and no
+  # other workload of this account does -- so "nothing of mine should exist in
+  # us-west-2" is a teardown assertion that can be verified in one command
+  # with no risk to unrelated production sites.
+  region: us-west-2
+  # No `version:` pin on purpose. EKS charges roughly 6x the standard control
+  # plane rate ($0.60/hr vs $0.10/hr) once a Kubernetes version passes into
+  # extended support, so pinning an old version here is a silent 6x cost bug.
+  # Take whatever eksctl's current default is.
+  tags:
+    project: rf-coverage
+    lifecycle: ephemeral
+
+vpc:
+  # THE most important line in this file. eksctl's default is `Single`, which
+  # provisions a NAT gateway at $0.045/hr plus $0.045/GB processed -- about
+  # $15 of pure idle cost over a fortnight before a single byte moves, and
+  # more than the compute bill once state-scale data flows through it.
+  #
+  # Nodes sit in public subnets with an internet gateway instead, which
+  # reaches ECR, the EKS API and the open-data S3 buckets for free. An S3
+  # Gateway VPC Endpoint is the usual next recommendation; it exists to bypass
+  # NAT charges, and with no NAT there is nothing to bypass.
+  nat:
+    gateway: Disable
+
+# The control plane requires at least two AZs even though the nodegroups below
+# deliberately use only one.
+availabilityZones: [us-west-2a, us-west-2b, us-west-2d]
+
+managedNodeGroups:
+  - name: spark-spot
+    # Pinned to ONE availability zone: Spark shuffle across AZs bills $0.01/GB
+    # in each direction. Spot capacity diversity comes from listing four
+    # instance types rather than from spreading across zones.
+    #
+    # us-west-2d was cheapest across every candidate type when measured on
+    # 2026-08-09 (r7g.2xlarge $0.1189/hr vs $0.1472 in 2a). Re-measure with
+    # `make spot-check` before each create rather than trusting this comment.
+    availabilityZones: [us-west-2d]
+    privateNetworking: false
+    spot: true
+    # arm64 ONLY. Graviton measured ~35% below the x86 equivalent spot price,
+    # and building natively on an Apple Silicon laptop removes QEMU emulation
+    # from the image loop entirely. Every image this cluster pulls
+    # (apache/spark 3.5.9, spark-operator 2.5.2, titiler, nginx:alpine) was
+    # confirmed to publish arm64 -- `make preflight` re-checks before create.
+    #
+    # One x86 type slipped into this list produces either ImagePullBackOff or
+    # `exec format error`, both of which read as mysterious. The
+    # nodeSelector in k8s/sparkapplication.yaml is the second line of defence:
+    # it turns that mistake into a Pending pod with a clear scheduling message.
+    instanceTypes: [r7g.2xlarge, m7g.2xlarge, c7g.4xlarge, m7g.4xlarge]
+    # Scaled up per session by `make nodes-up`, never left running.
+    desiredCapacity: 0
+    minSize: 0
+    maxSize: 4
+    volumeSize: 30
+    # Spot reclaim kills executors, which Spark simply re-requests. The driver
+    # is pinned to the on-demand `serve` group (see k8s/sparkapplication.yaml)
+    # so a reclaim never kills the job itself.
+    spotAllocationStrategy: capacity-optimized
+    iam:
+      attachPolicyARNs:
+        - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+      # Writes to our own bucket go through the node instance role and the
+      # hadoop-aws default credential chain (IAMInstanceCredentialsProvider).
+      #
+      # IRSA is the textbook answer and is deliberately not used: hadoop-aws
+      # 3.3.4 pairs with AWS SDK v1, so web identity means naming
+      # WebIdentityTokenCredentialsProvider explicitly plus an OIDC provider,
+      # an annotated service account and a trust policy -- an hour of work with
+      # a distinctive 403 failure mode, for approximately zero security delta
+      # on an ephemeral single-tenant cluster. Documented as the production
+      # upgrade in the README rather than silently skipped.
+      attachPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+              - s3:AbortMultipartUpload
+              - s3:ListBucketMultipartUploads
+            Resource: "arn:aws:s3:::${RF_BUCKET}/*"
+          - Effect: Allow
+            Action: [s3:ListBucket, s3:GetBucketLocation]
+            Resource: "arn:aws:s3:::${RF_BUCKET}"
+    labels:
+      workload: spark
+    tags:
+      project: rf-coverage
+
+  - name: serve
+    availabilityZones: [us-west-2d]
+    privateNetworking: false
+    # On-demand, not spot: this group hosts the Spark driver and the two
+    # serving pods. Losing it to a reclaim would kill the job; losing an
+    # executor would not.
+    instanceTypes: [t4g.large]
+    desiredCapacity: 0
+    minSize: 0
+    maxSize: 1
+    volumeSize: 30
+    iam:
+      attachPolicyARNs:
+        - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+      attachPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: [s3:GetObject, s3:PutObject, s3:ListBucket]
+            Resource:
+              - "arn:aws:s3:::${RF_BUCKET}"
+              - "arn:aws:s3:::${RF_BUCKET}/*"
+    labels:
+      workload: serve
+    tags:
+      project: rf-coverage
+
+# Deliberately absent, each for a stated reason (README "Evaluated and
+# rejected"): Karpenter and cluster-autoscaler (two known workload shapes
+# running ~20 hours total; an hour of IAM setup that saves nothing and adds a
+# failure mode on demo day), control-plane logging (CloudWatch bills $0.50/GB
+# ingested and Spark is chatty), and any PersistentVolumeClaim (the pipeline
+# is S3-only and stateless, so there are no EBS volumes to orphan after
+# `eksctl delete cluster`).

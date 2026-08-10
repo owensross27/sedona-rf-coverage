@@ -1,0 +1,159 @@
+SHELL := /bin/bash
+VENV  := .venv/bin
+SCOPE ?= demo
+
+# Never hardcoded: this repo is public. Export RF_BUCKET and AWS_ACCOUNT_ID, or
+# copy infra/terraform/terraform.tfvars.example and let terraform own them.
+AWS_REGION     ?= us-west-2
+CLUSTER        ?= rf-cov
+ECR_REPO       ?= sedona-rf-coverage
+IMAGE_TAG      ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
+ECR_IMAGE       = $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(ECR_REPO):$(IMAGE_TAG)
+
+.PHONY: setup test bench demo pipeline dq tiles web-serve image push preflight \
+        spot-check cluster-up cluster-down nodes-up nodes-down job serve-up dns \
+        status check-nat cost destroy-all clean
+
+## --- local, no AWS account required ----------------------------------------
+
+setup:
+	uv venv --python 3.11 .venv
+	uv pip install -p .venv "pyspark==3.5.3"
+	uv pip install -p .venv -r requirements.txt
+	@$(VENV)/python -c "import pyspark; assert pyspark.__version__=='3.5.3'; print('stack ok')"
+
+# The correctness gate. Runs without pytest so a cold clone needs no framework.
+test:
+	$(VENV)/python tests/test_propagation.py
+
+# The performance gate: >= 100k pairs/min/core before any statewide run.
+bench:
+	$(VENV)/python scripts/bench_kernel.py 200000
+
+# The stranger-clone target: one county, local Spark, writes to ./data, no
+# cloud credentials anywhere. If this stops working the repo is not reproducible.
+demo:
+	$(MAKE) test
+	SCOPE=demo LOCAL_OUT=1 $(MAKE) pipeline
+
+pipeline:
+	source scripts/java_env.sh; set -e; \
+	for s in 01_towers 02_terrain 03_census 04_grid 05_links 06_coverage 07_dq; do \
+	  echo "== $$s"; SCOPE=$(SCOPE) $(VENV)/python src/$$s.py; \
+	done
+
+dq:
+	source scripts/java_env.sh && SCOPE=$(SCOPE) $(VENV)/python src/07_dq.py
+
+# Proves the JDK, pyspark, Sedona jars and ST_* functions all resolve together.
+# Cheapest possible check that the stack is real before any stage runs.
+smoke:
+	source scripts/java_env.sh && $(VENV)/python scripts/smoke_sedona.py
+
+tiles:
+	bash scripts/make_tiles.sh
+
+web-serve:
+	$(VENV)/python -m RangeHTTPServer 8000 --directory web
+
+## --- image ------------------------------------------------------------------
+
+# Native arm64 build. There is deliberately no buildx/--platform amd64 target:
+# the cluster is all-Graviton, so cross-compiling under QEMU would add minutes
+# to every iteration for nothing.
+image:
+	docker build -t $(ECR_REPO):$(IMAGE_TAG) -f docker/Dockerfile .
+
+push: preflight
+	aws ecr get-login-password --region $(AWS_REGION) \
+	  | docker login --username AWS --password-stdin \
+	    $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
+	docker tag $(ECR_REPO):$(IMAGE_TAG) $(ECR_IMAGE)
+	docker push $(ECR_IMAGE)
+
+# The tax for going single-arch: assert every third-party image the cluster
+# pulls actually publishes arm64, before a pod fails with `exec format error`.
+preflight:
+	@for img in apache/spark:3.5.9-scala2.12-java17-python3-ubuntu \
+	            ghcr.io/kubeflow/spark-operator/controller:2.5.2 \
+	            ghcr.io/developmentseed/titiler:latest \
+	            nginx:alpine; do \
+	  if docker manifest inspect $$img 2>/dev/null | grep -q arm64; then \
+	    echo "  arm64 ok   $$img"; \
+	  else echo "  MISSING    $$img"; exit 1; fi; \
+	done
+
+## --- cluster ----------------------------------------------------------------
+
+# Three seconds of measurement beats a stale comment: re-check which AZ and
+# instance type is actually cheapest before every create.
+spot-check:
+	@aws ec2 describe-spot-price-history --region $(AWS_REGION) \
+	  --instance-types r7g.2xlarge m7g.2xlarge c7g.4xlarge m7g.4xlarge \
+	  --product-descriptions Linux/UNIX --max-items 40 \
+	  --query 'SpotPriceHistory[].[AvailabilityZone,InstanceType,SpotPrice]' \
+	  --output table
+
+cluster-up:
+	RF_BUCKET=$(RF_BUCKET) envsubst < infra/eks/cluster.yaml | eksctl create cluster -f -
+	helm repo add spark-operator https://kubeflow.github.io/spark-operator 2>/dev/null || true
+	helm install spark-operator spark-operator/spark-operator \
+	  --namespace spark-operator --create-namespace --version 2.5.2 --wait
+	@$(MAKE) check-nat
+
+nodes-up:
+	eksctl scale nodegroup --cluster $(CLUSTER) --name spark-spot --nodes 3 --region $(AWS_REGION)
+	eksctl scale nodegroup --cluster $(CLUSTER) --name serve      --nodes 1 --region $(AWS_REGION)
+
+nodes-down:
+	eksctl scale nodegroup --cluster $(CLUSTER) --name spark-spot --nodes 0 --region $(AWS_REGION)
+	eksctl scale nodegroup --cluster $(CLUSTER) --name serve      --nodes 0 --region $(AWS_REGION)
+
+cluster-down:
+	eksctl delete cluster --name $(CLUSTER) --region $(AWS_REGION) --wait
+
+STAGE ?= 05
+job:
+	STAGE_NAME=$(STAGE) SCOPE=$(SCOPE) RF_BUCKET=$(RF_BUCKET) ECR_IMAGE=$(ECR_IMAGE) \
+	STAGE_FILE=$$(basename $$(ls src/$(STAGE)_*.py)) \
+	  envsubst < k8s/sparkapplication.yaml | kubectl apply -f -
+	kubectl get sparkapplication -w
+
+serve-up:
+	kubectl apply -k k8s/serving/
+
+# The node's public IP changes on every cluster recreate. CloudFront's origin
+# is a stable hostname pointed here, so only this 60-second-TTL A record moves
+# and the distribution itself is never reconfigured.
+dns:
+	bash scripts/node_dns.sh
+
+## --- guardrails -------------------------------------------------------------
+
+# First command of every session. A forgotten cluster is ~$12/day, which is
+# the single largest cost risk in the project.
+status:
+	@echo "== nodes";    kubectl get nodes 2>/dev/null || echo "  (no cluster)"
+	@echo "== spark";    kubectl get sparkapplication 2>/dev/null || true
+	@$(MAKE) check-nat
+	@echo "== month-to-date spend"; \
+	  aws ce get-cost-and-usage --time-period Start=$$(date -u +%Y-%m-01),End=$$(date -u +%Y-%m-%d) \
+	    --granularity MONTHLY --metrics UnblendedCost \
+	    --query 'ResultsByTime[0].Total.UnblendedCost.Amount' --output text 2>/dev/null || true
+
+# eksctl's default would have created a NAT gateway. Assert it did not.
+check-nat:
+	@n=$$(aws ec2 describe-nat-gateways --region $(AWS_REGION) \
+	      --filter Name=state,Values=available --query 'length(NatGateways)' --output text 2>/dev/null || echo 0); \
+	 if [ "$$n" != "0" ]; then echo "COST ALERT: $$n NAT gateway(s) in $(AWS_REGION) -- \$$0.045/hr each"; exit 1; \
+	 else echo "== nat: none (good)"; fi
+
+# eksctl delete cluster does NOT touch ECR, S3, or leftover EBS volumes.
+destroy-all: cluster-down
+	cd infra/terraform && terraform destroy
+	@echo "== orphaned EBS volumes in $(AWS_REGION):"
+	@aws ec2 describe-volumes --region $(AWS_REGION) \
+	  --filters Name=status,Values=available --query 'Volumes[].VolumeId' --output text
+
+clean:
+	rm -rf data/tmp __pycache__ src/__pycache__ tests/__pycache__

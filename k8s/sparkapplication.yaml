@@ -1,0 +1,89 @@
+# kubeflow spark-operator SparkApplication. Applied by `make job STAGE=05
+# SCOPE=state`, which substitutes the ${...} placeholders with envsubst -- the
+# AWS account id and bucket name are never committed to this repo.
+#
+# CRD fields verified against the real v2.5.2 schema, not guessed:
+#   curl -s https://raw.githubusercontent.com/kubeflow/spark-operator/v2.5.2/\
+#     charts/spark-operator-chart/crds/sparkoperator.k8s.io_sparkapplications.yaml
+# apiVersion is sparkoperator.k8s.io/v1beta2 -- the operator's "v2.5.2" is the
+# release/chart version, not the CRD API version. type enum is
+# ["Java","Python","Scala","R"]; mode enum is ["cluster","client"]; env uses
+# corev1 EnvVar (name/value list), NOT the deprecated envVars map.
+#
+# serviceAccountName assumes:
+#   helm install spark-operator spark-operator/spark-operator \
+#     --namespace spark-operator --create-namespace --version 2.5.2
+# which auto-creates a Role/RoleBinding/ServiceAccount for spark apps in every
+# namespace listed in spark.jobNamespaces (default ["default"]). Release name
+# "spark-operator" -> service account "spark-operator-spark".
+#
+# The operator CRD is the primary submission path here, inverting the choice
+# made in the sibling s2-field-ndvi repo. On a single-job kind cluster the
+# operator was pure overhead; across this pipeline's stages it earns its keep:
+# `kubectl get sparkapplication` gives job status without parsing driver logs,
+# and this file is an artifact a reviewer can read. Native
+# `spark-submit --master k8s://` stays documented in docs/eks-runbook.md as
+# the dev-loop fallback.
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: rf-coverage-${STAGE_NAME}
+  namespace: default
+  labels:
+    project: rf-coverage
+spec:
+  type: Python
+  pythonVersion: "3"
+  mode: cluster
+  image: ${ECR_IMAGE}
+  imagePullPolicy: IfNotPresent
+  mainApplicationFile: local:///opt/rfc/src/${STAGE_FILE}
+  sparkVersion: "3.5.9"
+  restartPolicy:
+    type: Never          # surface failures rather than retry-masking them
+  sparkConf:
+    spark.kubernetes.namespace: default
+    # Shuffle spill goes to a sized emptyDir rather than the container
+    # filesystem. The sibling repo recorded a run spilling ~30 GB; the
+    # container's writable layer is not the place for that.
+    spark.local.dir: /tmp/spark-local
+    spark.kubernetes.driver.volumes.emptyDir.spark-local.mount.path: /tmp/spark-local
+    spark.kubernetes.executor.volumes.emptyDir.spark-local.mount.path: /tmp/spark-local
+    spark.kubernetes.executor.volumes.emptyDir.spark-local.options.sizeLimit: 20Gi
+  driver:
+    cores: 1
+    # PySpark's memory overhead factor is 0.4, NOT the 0.1 that applies to
+    # JVM-only jobs -- so `memory: 2g` requests roughly 2.8 GiB of pod memory.
+    # Size against node ALLOCATABLE, not node RAM, or pods sit Pending with a
+    # confusing message.
+    memory: 2g
+    serviceAccount: spark-operator-spark
+    nodeSelector:
+      # Driver on the on-demand group: a spot reclaim then costs executors,
+      # which Spark re-requests, instead of killing the whole job.
+      workload: serve
+      kubernetes.io/arch: arm64
+    env:
+      - name: SCOPE
+        value: "${SCOPE}"
+      - name: RF_BUCKET
+        value: "${RF_BUCKET}"
+      - name: RFC_JARS_BAKED
+        value: "1"
+  executor:
+    instances: 3
+    cores: 6
+    # 24g x 1.4 overhead = ~33.6 GiB, sized to one executor per r7g.2xlarge
+    # (64 GiB) with headroom for the kubelet and the broadcast terrain arrays.
+    memory: 24g
+    nodeSelector:
+      workload: spark
+      kubernetes.io/arch: arm64
+    env:
+      - name: SCOPE
+        value: "${SCOPE}"
+      - name: RF_BUCKET
+        value: "${RF_BUCKET}"
+      - name: RFC_JARS_BAKED
+        value: "1"
+  # No volumes: every input and output is S3. Nothing to orphan on teardown.

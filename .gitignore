@@ -1,0 +1,36 @@
+# data never enters git
+data/
+spark-warehouse/
+metastore_db/
+derby.log
+
+# environments and secrets
+.venv/
+.env
+*.pem
+*.key
+kubeconfig*
+
+# terraform: state and any file that could carry the account id or bucket name
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars
+!terraform.tfvars.example
+
+# build/runtime junk
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store
+
+# large binaries. Tiles under web/ are the deliberate exception, but keep them
+# under ~90 MB: git hard-blocks single files at 100 MiB and a stray GeoTIFF in
+# history cannot be removed without a rewrite.
+*.tif
+*.tiff
+*.zip
+*.parquet
+*.gpkg
+!web/*.pmtiles

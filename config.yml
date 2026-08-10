@@ -1,0 +1,198 @@
+# sedona-rf-coverage -- pre-registered configuration.
+#
+# PRE-REGISTRATION NOTICE. Every RF parameter and threshold in this file was
+# committed BEFORE any coverage surface was computed (see git log for this
+# file's first commit vs the first artifacts/ commit). They are not tuned to
+# make the output map look good. Where a value disagrees with reality, the
+# disagreement is reported in docs/validation.md rather than fixed by moving
+# the number. If a parameter IS changed later, the commit message must say
+# what measurement forced the change.
+
+state:
+  # West Virginia. FIPS 54 is used for TIGER filenames, ACS API queries, and
+  # the FCC ASR state filter alike.
+  name: West Virginia
+  fips: "54"
+  usps: WV
+  # EPSG:5070 (NAD83 / Conus Albers) bounds, metres. Derived from the state
+  # boundary in 03_census.py and asserted there -- these are the working
+  # numbers for array allocation, refreshed by `make bounds`.
+  bounds_5070: [1050000.0, 1750000.0, 1500000.0, 2150000.0]
+
+scopes:
+  # Every stage takes SCOPE from the environment. demo is the stranger-clone
+  # tier: one county, no AWS account, runs on a laptop in ~15 min.
+  demo:
+    counties: ["54039"]        # Kanawha (Charleston) -- urban + river valley terrain
+    description: one county, local Spark, no cloud credentials
+  mvp:
+    counties: ["54039", "54005", "54081", "54025", "54063"]
+    description: five contiguous southern counties, local Spark
+  state:
+    counties: null             # null = all 55 WV counties
+    description: full state, EKS
+
+rf:
+  # 700 MHz lower-band LTE (Band 12/13). The band that actually carries rural
+  # coverage; modelling PCS/mid-band would understate real-world reach.
+  frequency_mhz: 700.0
+  # Macro site EIRP. 60 dBm is a conventional rural macro figure.
+  eirp_dbm: 60.0
+  # RSRP is per-resource-element, so the total EIRP spreads across the
+  # subcarriers of the carrier bandwidth: 10 MHz LTE = 50 RB = 600 subcarriers.
+  # 10*log10(600) = 27.78 dB.
+  subcarriers: 600
+  # Receiver height above ground (handset at head height).
+  rx_height_m: 1.5
+  # Fallback tx height when the ASR record has no usable height.
+  default_tx_height_m: 45.0
+  # Lognormal shadow-fading margin for ~90% cell-edge reliability at sigma=8dB.
+  shadow_margin_db: 8.0
+  # Coverage threshold. -105 dBm RSRP is the FCC Broadband Data Collection 4G
+  # LTE reference value, chosen SPECIFICALLY so validation against published
+  # BDC polygons compares like with like rather than against a threshold of
+  # our own choosing.
+  rsrp_threshold_dbm: -105.0
+  # Max tower->receiver distance considered. Derived, not guessed: the link
+  # budget allows 137 dB of path loss (60 - 27.78 - (-105) + 8 margin -> see
+  # docs/link-budget.md), free-space loss at 700 MHz over 40 km is ~121 dB,
+  # leaving ~16 dB for diffraction and clutter.
+  #
+  # This is a GENEROUS cap, not a tight one, and deliberately so. The binding
+  # constraint on a typical site is not the link budget but the radio horizon:
+  # sqrt(2*k*R*h) is only ~29 km for a 50 m mast, plus ~5 km for a 1.5 m
+  # handset, so links past ~34 km are obstructed by the curvature of the earth
+  # itself and fall below threshold on their own (verified in
+  # test_earth_curvature_blocks_beyond_the_radio_horizon). The cap is set
+  # beyond that horizon so tall structures -- WV has registered masts over
+  # 300 m, with horizons past 70 km -- are not clipped a priori.
+  max_link_km: 40.0
+  # Terrain samples per path profile. 128 over a 40 km path = one sample per
+  # ~310 m, finer than the 90 m grid at short range and adequate at long.
+  profile_samples: 128
+  # Effective-earth-radius factor for standard atmospheric refraction.
+  k_factor: 1.333
+
+clutter:
+  # Excess path loss in dB by ESA WorldCover class. These are the single
+  # calibration knob in the model; they are deliberately coarse round numbers
+  # rather than fitted values, because fitting them against the same FCC data
+  # used for validation would make the validation circular.
+  # WorldCover v200 class codes:
+  10: 12.0   # tree cover
+  20: 5.0    # shrubland
+  30: 0.0    # grassland
+  40: 0.0    # cropland
+  50: 15.0   # built-up
+  60: 0.0    # bare / sparse vegetation
+  70: 0.0    # snow and ice
+  80: 0.0    # permanent water bodies
+  90: 2.0    # herbaceous wetland
+  95: 2.0    # mangroves (not present in WV; listed for completeness)
+  100: 0.0   # moss and lichen
+
+grid:
+  # H3 resolution 8 (~0.74 km^2, ~930 m across) for receivers. Finer would be
+  # false precision: the 8 dB shadow-fading margin already exceeds what r9
+  # would resolve. r7 is the aggregation level for the site optimizer.
+  receiver_res: 8
+  optimizer_res: 7
+  # Shared analysis grid. All metric work happens in EPSG:5070 at 90 m so that
+  # terrain and clutter share one affine transform and distance is Euclidean.
+  # 90 m is justified by the Fresnel radius at 700 MHz over 20 km (~65 m):
+  # ridgelines, which drive diffraction, survive this resampling.
+  crs: 5070
+  cell_m: 90
+
+demand:
+  # demand = pop * (1 + county_growth) + tourism_weight * sum(poi weights)
+  #
+  # Tourism is ADDITIVE, not multiplicative: a trailhead has ~zero residential
+  # population but real demand, and a multiplicative term would zero it out.
+  # tourism_weight is calibrated so a major ski resort is worth roughly 5000
+  # effective residents. docs/validation.md reports the site ranking under
+  # tourism_weight in {0, 1000, 3000} to show the ranking is not an artifact
+  # of this one number.
+  tourism_weight: 1000.0
+  # Overture `places` categories -> relative weight. Spread over the k-ring
+  # below so a destination raises demand in its approach corridor too.
+  poi_weights:
+    ski_resort: 5.0
+    national_park: 4.0
+    state_park: 2.0
+    campground: 2.0
+    hiking_trail: 2.0
+    tourist_attraction: 1.0
+  poi_k_ring: 2
+  # ACS 5-year vintages for the growth signal. Growth is computed at COUNTY
+  # level only: block-group boundaries were redrawn between the 2010 and 2020
+  # censuses, so a GEOID-to-GEOID join across these two vintages is silently
+  # wrong. Counties are stable.
+  acs_growth_vintages: [2019, 2024]
+
+siting:
+  # Number of new sites the optimizer proposes.
+  n_sites: 20
+  # Candidate generation.
+  colocation_radius_km: 15.0   # existing ASR structures this close to a gap
+  max_candidates: 800          # prune by naive demand before the exact solve
+  candidate_height_m: 60.0     # assumed height for a new-build candidate
+  # National Radio Quiet Zone. Candidates inside it are FLAGGED, never
+  # silently dropped: transmitting there is legal but requires coordination
+  # with the Green Bank Observatory, which is a real-world siting cost a
+  # coverage model should surface rather than hide.
+  nrqz_policy: flag
+
+dq:
+  # Data-quality gate thresholds (07_dq.py exits non-zero on breach).
+  min_towers: 100              # WV ASR structures; far below the true count
+  max_null_geom_frac: 0.0
+  min_hex_count: 50000         # state scope
+  max_rsrp_dbm: -30.0          # a stronger prediction than this is a bug
+  min_rsrp_dbm: -200.0
+
+paths:
+  # s3://<bucket>/<layer>/... -- bucket comes from RF_BUCKET in the
+  # environment so no account-specific name is committed to a public repo.
+  raw: raw
+  bronze: bronze
+  silver: silver
+  gold: gold
+  cog: cog
+
+sources:
+  # Every path below was verified live with `aws s3 ls --no-sign-request` on
+  # 2026-08-09. Open buckets are read anonymously (see src/session.py).
+  dem:
+    bucket: copernicus-dem-30m
+    # Copernicus_DSM_COG_10_N38_00_W081_00_DEM/<same>.tif
+    prefix_fmt: "Copernicus_DSM_COG_10_{ns}{lat:02d}_00_{ew}{lon:03d}_00_DEM"
+    license: "Copernicus DEM free licence"
+  worldcover:
+    bucket: esa-worldcover
+    prefix: v200/2021/map
+    license: "CC BY 4.0"
+  overture:
+    bucket: overturemaps-us-west-2
+    # Overture lifecycle-deletes releases after ~60 days; pin and refresh.
+    release: "2026-07-22.0"
+    license: "CDLA Permissive 2.0 / ODbL for OSM-derived"
+  ookla:
+    bucket: ookla-open-data
+    prefix: parquet/performance/type=mobile
+    year: 2026
+    quarter: 2
+    license: "CC BY-NC-SA 4.0 -- non-commercial use only"
+  asr:
+    url: "https://data.fcc.gov/download/pub/uls/complete/r_tower.zip"
+    license: "US public domain"
+  tiger:
+    url_fmt: "https://www2.census.gov/geo/tiger/TIGER2024/BG/tl_2024_{fips}_bg.zip"
+    license: "US public domain"
+  acs:
+    # Requires a free key from https://api.census.gov/data/key_signup.html
+    # exported as CENSUS_API_KEY. Verified 2026-08-09: keyless requests 302 to
+    # a "missing key" page rather than returning data.
+    base: "https://api.census.gov/data"
+    variable: B01003_001E     # total population
+    license: "US public domain"

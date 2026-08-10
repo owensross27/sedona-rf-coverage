@@ -1,0 +1,19 @@
+# Install order matters: pyspark FIRST, pinned, then sedona WITHOUT extras.
+# apache-sedona[spark] resolves pyspark 4.x / Scala 2.13 and breaks every 2.12
+# jar pinned in src/session.py and docker/Dockerfile.
+pyspark==3.5.3
+apache-sedona==1.9.1
+pyyaml>=6.0
+numpy>=1.26
+pandas>=2.0
+pyarrow>=15.0
+shapely>=2.0
+pyogrio>=0.8          # TIGER shapefile -> GeoParquet without GDAL CLI
+geopandas>=1.0
+rasterio>=1.3         # DEM/WorldCover COG read + reproject to EPSG:5070
+h3>=4.0               # receiver grid; Sedona ST_H3CellIDs is used in-cluster
+duckdb>=1.0           # Overture bbox row-group pruning outside Spark
+requests>=2.31
+scipy>=1.11           # optimize.milp (HiGHS) for the exact siting solve
+matplotlib>=3.8
+rangehttpserver>=1.2  # make web-serve: PMTiles needs HTTP range requests
