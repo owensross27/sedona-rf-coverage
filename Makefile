@@ -28,6 +28,7 @@ test:
 	$(VENV)/python tests/test_propagation.py
 	$(VENV)/python tests/test_bronze.py
 	$(VENV)/python tests/test_coverage.py
+	$(VENV)/python tests/test_siting.py
 
 # The performance gate: >= 100k pairs/min/core before any statewide run.
 bench:
@@ -45,7 +46,7 @@ demo:
 pipeline:
 	source scripts/java_env.sh; set -e; \
 	if [ -f .env ]; then set -a; . ./.env; set +a; fi; \
-	for s in 01_towers 02_terrain 03_census 04_grid 05_links 06_coverage 07_dq; do \
+	for s in 01_towers 02_terrain 03_census 04_grid 05_links 06_coverage 07_dq 09_siting; do \
 	  echo "== $$s"; SCOPE=$(SCOPE) $(VENV)/python src/$$s.py; \
 	done
 
