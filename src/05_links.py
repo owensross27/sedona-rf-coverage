@@ -134,6 +134,15 @@ def main() -> int:
     sedona = get_sedona(f"rf-links-{sc['name']}")
     assert_versions(sedona)
 
+    # The mapInPandas kernel closes over link_rsrp, which cloudpickle
+    # serialises BY REFERENCE to its module. The python workers therefore have
+    # to be able to `import propagation` themselves, and src/ is on the
+    # driver's sys.path only -- so without this the executors die with
+    # ModuleNotFoundError before a single link is computed. propagation.py
+    # imports nothing but numpy, so shipping the one file is enough.
+    sedona.sparkContext.addPyFile(
+        str(Path(__file__).resolve().parent / "propagation.py"))
+
     # format("geoparquet"), not .parquet(): the plain reader hands back the
     # geometry column as BinaryType and every ST_* call below fails to resolve
     # against it. GeometryUDT only comes back through Sedona's own reader.

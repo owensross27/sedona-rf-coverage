@@ -154,8 +154,13 @@ def main() -> int:
     sedona = get_sedona("rf-census")
     pdf = keep.drop(columns="geometry").assign(
         wkb=keep.geometry.to_wkb(), pop=keep["pop"].astype(float))
-    sedona.createDataFrame(pdf).createOrReplaceTempView("bg")
-    geo = sedona.sql("SELECT * EXCEPT (wkb), ST_GeomFromWKB(wkb) AS geom FROM bg")
+    # Column list built from the frame rather than written out as
+    # `SELECT * EXCEPT (wkb)`: that syntax does not parse on the pinned
+    # Spark 3.5.3, and naming the columns by hand here would silently drop any
+    # field added to `keep` above.
+    sdf = sedona.createDataFrame(pdf)
+    geo = sdf.selectExpr(*[c for c in sdf.columns if c != "wkb"],
+                         "ST_GeomFromWKB(wkb) AS geom")
 
     dest = out_path("bronze", "blockgroups")
     geo.write.format("geoparquet").mode("overwrite").save(dest)
