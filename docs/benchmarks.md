@@ -19,6 +19,12 @@ synthetic West-Virginia-sized grid (4222 x 4777 cells at 90 m).
 
 Date: 2026-08-09. 200,000 pairs x 128 profile samples in 1.27 s.
 
+The row above is a **frozen record of one run**, not a value later runs should match.
+`make bench` is a live wall-clock measurement on a laptop with other things running;
+repeat runs on the same machine and same commit spanned roughly 9.4M to 10.6M
+pairs/min/core. Treat a differing rerun as normal variance. The only result that means
+anything is a fall toward the 100,000 gate.
+
 ### What the headroom does and does not buy
 
 At this rate the entire statewide link pass -- on the order of 3M
