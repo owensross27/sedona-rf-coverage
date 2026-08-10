@@ -27,6 +27,7 @@ setup:
 test:
 	$(VENV)/python tests/test_propagation.py
 	$(VENV)/python tests/test_bronze.py
+	$(VENV)/python tests/test_coverage.py
 
 # The performance gate: >= 100k pairs/min/core before any statewide run.
 bench:
@@ -38,8 +39,12 @@ demo:
 	$(MAKE) test
 	SCOPE=demo LOCAL_OUT=1 $(MAKE) pipeline
 
+# 03_census needs CENSUS_API_KEY and it deliberately lives in .env rather than a
+# shell dotfile, so a fresh shell has never heard of it. Sourced here (not in
+# each stage) because it is the one secret the local pipeline takes.
 pipeline:
 	source scripts/java_env.sh; set -e; \
+	if [ -f .env ]; then set -a; . ./.env; set +a; fi; \
 	for s in 01_towers 02_terrain 03_census 04_grid 05_links 06_coverage 07_dq; do \
 	  echo "== $$s"; SCOPE=$(SCOPE) $(VENV)/python src/$$s.py; \
 	done
