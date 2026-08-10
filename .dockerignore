@@ -1,0 +1,34 @@
+# The Dockerfile COPYs exactly four things: requirements.txt, src/, scripts/ and
+# config.yml. Without this file `docker build .` ships a 1.1 GB context on every
+# invocation -- .venv alone is 889 MB and data/ is 234 MB -- and pays for it
+# again on no-op rebuilds, before a single layer runs.
+.venv/
+/data/
+.git/
+.github/
+web/
+docs/
+tests/
+notebooks/
+infra/
+k8s/
+spark-warehouse/
+metastore_db/
+derby.log
+
+__pycache__/
+**/__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store
+
+# Secrets and local-only context. src/ and scripts/ are copied, so an .env that
+# ever moved into either would otherwise land in a layer.
+.env
+CLAUDE.local.md
+*.pem
+*.key
+kubeconfig*
+*.tfstate
+*.tfstate.*
+*.tfvars

@@ -48,11 +48,18 @@ RUN apt-get update -qq \
 # writes plain GeoParquet and COGs with no schema-evolution or incremental
 # -refresh requirement, so the table format would be unused weight. See the
 # README's "evaluated and rejected" section.
-RUN cd "$SPARK_HOME/jars" \
-    && curl -fsSL -O https://repo1.maven.org/maven2/org/apache/sedona/sedona-spark-shaded-3.5_2.12/1.9.1/sedona-spark-shaded-3.5_2.12-1.9.1.jar \
-    && curl -fsSL -O https://repo1.maven.org/maven2/org/datasyslab/geotools-wrapper/1.9.1-33.5/geotools-wrapper-1.9.1-33.5.jar \
-    && curl -fsSL -O https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.4/hadoop-aws-3.3.4.jar \
-    && curl -fsSL -O https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar
+# --retry matters here more than it looks: this is 396 MB in ONE layer with no
+# resume, and 280 MB of it is aws-java-sdk-bundle alone. A connection dropped at
+# 250 MB fails the whole RUN and Docker restarts the layer from zero.
+RUN cd "${SPARK_HOME:?SPARK_HOME unset}/jars" \
+    && for jar in \
+         org/apache/sedona/sedona-spark-shaded-3.5_2.12/1.9.1/sedona-spark-shaded-3.5_2.12-1.9.1.jar \
+         org/datasyslab/geotools-wrapper/1.9.1-33.5/geotools-wrapper-1.9.1-33.5.jar \
+         org/apache/hadoop/hadoop-aws/3.3.4/hadoop-aws-3.3.4.jar \
+         com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar ; do \
+         curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+           -O "https://repo1.maven.org/maven2/$jar" ; \
+       done
 
 # NOTE: there is deliberately no spark-defaults.conf baked here. Spark on
 # Kubernetes generates a ConfigMap from the submit-time config and mounts it
