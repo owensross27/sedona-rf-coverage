@@ -22,9 +22,11 @@ setup:
 	uv pip install -p .venv -r requirements.txt
 	@$(VENV)/python -c "import pyspark; assert pyspark.__version__=='3.5.3'; print('stack ok')"
 
-# The correctness gate. Runs without pytest so a cold clone needs no framework.
+# The correctness gate. Runs without pytest so a cold clone needs no framework,
+# and without network so it works before any credential exists.
 test:
 	$(VENV)/python tests/test_propagation.py
+	$(VENV)/python tests/test_bronze.py
 
 # The performance gate: >= 100k pairs/min/core before any statewide run.
 bench:

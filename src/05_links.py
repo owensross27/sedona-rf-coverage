@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config import GRID, RF, clutter_loss_lut, scope  # noqa: E402
 from propagation import TerrainGrid, link_rsrp  # noqa: E402
 from session import assert_versions, get_sedona, out_path  # noqa: E402
+from sources import gdal_path  # noqa: E402
 
 # Columns handed back to Spark. Declared once so the schema string below and
 # the kernel's output dict cannot drift apart.
@@ -55,6 +56,10 @@ def load_terrain(dem_path: str, clutter_path: str) -> TerrainGrid:
     """
     import rasterio
 
+    # gdal_path: out_path speaks s3a:// for Spark's hadoop-aws, and GDAL has
+    # never heard of that scheme -- it fails as "not a supported file format",
+    # which reads like a corrupt COG rather than a URI problem.
+    dem_path, clutter_path = gdal_path(dem_path), gdal_path(clutter_path)
     with rasterio.open(dem_path) as src:
         dem = src.read(1)
         transform, crs = src.transform, src.crs
@@ -129,8 +134,11 @@ def main() -> int:
     sedona = get_sedona(f"rf-links-{sc['name']}")
     assert_versions(sedona)
 
-    towers = sedona.read.parquet(out_path("bronze", "towers"))
-    hexes = sedona.read.parquet(out_path("silver", "hex_grid"))
+    # format("geoparquet"), not .parquet(): the plain reader hands back the
+    # geometry column as BinaryType and every ST_* call below fails to resolve
+    # against it. GeometryUDT only comes back through Sedona's own reader.
+    towers = sedona.read.format("geoparquet").load(out_path("bronze", "towers"))
+    hexes = sedona.read.format("geoparquet").load(out_path("silver", "hex_grid"))
     towers.createOrReplaceTempView("towers")
     hexes.createOrReplaceTempView("hexes")
 
