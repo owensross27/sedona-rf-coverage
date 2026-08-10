@@ -11,6 +11,10 @@ derby.log
 *.key
 kubeconfig*
 
+# local-only context: never publish. CLAUDE.md IS tracked (it is useful
+# engineering documentation); CLAUDE.local.md is not.
+CLAUDE.local.md
+
 # terraform: state and any file that could carry the account id or bucket name
 *.tfstate
 *.tfstate.*
