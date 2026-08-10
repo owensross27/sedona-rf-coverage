@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WV RF coverage</title>
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/pmtiles@3.2.1/dist/pmtiles.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; font-family: -apple-system, system-ui, sans-serif; }
+  #map { position: absolute; inset: 0; }
+  .panel {
+    position: absolute; z-index: 2; background: rgba(255,255,255,.95);
+    border-radius: 8px; box-shadow: 0 1px 6px rgba(0,0,0,.3); font-size: 13px;
+  }
+  #controls { top: 10px; left: 10px; padding: 10px 12px; max-width: 240px; }
+  #controls h1 { font-size: 14px; margin: 0 0 6px; }
+  #controls label { display: block; margin: 2px 0; cursor: pointer; }
+  #controls .note { color: #666; font-size: 11px; margin-top: 6px; }
+  #info { bottom: 24px; left: 10px; padding: 10px 12px; max-width: 300px; display: none; }
+  #info h2 { font-size: 13px; margin: 0 0 4px; }
+  #info td { padding: 1px 6px 1px 0; vertical-align: top; }
+  #info .why { margin-top: 6px; padding-top: 6px; border-top: 1px solid #ddd; color: #444; }
+  #legend { bottom: 24px; right: 10px; padding: 8px 12px; font-size: 11px; }
+  .swatch { display: inline-block; width: 10px; height: 10px; margin-right: 4px; border-radius: 2px; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="controls" class="panel">
+  <h1>West Virginia RF coverage</h1>
+  <div id="modes"></div>
+  <label><input type="checkbox" id="towers-toggle" checked> ASR structures</label>
+  <label><input type="checkbox" id="sites-toggle" checked> Recommended sites</label>
+  <div class="note">Modelled 700&nbsp;MHz LTE, -105&nbsp;dBm threshold.
+  Click a hexagon for why its signal is what it is.
+  Demo scope: Kanawha County.</div>
+</div>
+
+<div id="info" class="panel"></div>
+<div id="legend" class="panel"></div>
+
+<script>
+const MODES = {
+  rsrp: {
+    label: "Signal (best-server RSRP)",
+    paint: ["interpolate", ["linear"], ["coalesce", ["get", "rsrp"], -125],
+            -125, "#2c105c", -115, "#711f81", -105, "#b63679",
+            -95, "#ee605e", -85, "#fdae78", -70, "#fcfdbf"],
+    legend: [["#2c105c","-125 dBm"],["#b63679","-105 (threshold)"],["#fdae78","-85"],["#fcfdbf","-70"]],
+  },
+  covered: {
+    label: "Coverage vs gap",
+    paint: ["case", ["get", "covered"], "#7cbf8c", "#d1495b"],
+    legend: [["#7cbf8c","covered"],["#d1495b","gap"]],
+  },
+  pop: {
+    label: "Population",
+    paint: ["interpolate", ["linear"], ["sqrt", ["get", "pop"]],
+            0, "#f7fbff", 5, "#c6dbef", 15, "#6baed6", 40, "#2171b5", 80, "#08306b"],
+    legend: [["#f7fbff","0"],["#6baed6","~200"],["#08306b","6000+"]],
+  },
+  tree: {
+    label: "Tree cover",
+    paint: ["interpolate", ["linear"], ["get", "tree"],
+            0, "#f7fcf5", 50, "#a1d99b", 80, "#41ab5d", 100, "#00441b"],
+    legend: [["#f7fcf5","0%"],["#41ab5d","80%"],["#00441b","100%"]],
+  },
+  relief: {
+    label: "Terrain relief",
+    paint: ["interpolate", ["linear"], ["get", "relief"],
+            0, "#ffffe5", 100, "#fe9929", 200, "#cc4c02", 300, "#662506"],
+    legend: [["#ffffe5","0 m"],["#fe9929","100 m"],["#662506","300 m"]],
+  },
+};
+
+protocol = new pmtiles.Protocol();
+maplibregl.addProtocol("pmtiles", protocol.tile);
+
+const map = new maplibregl.Map({
+  container: "map",
+  style: "https://tiles.openfreemap.org/styles/positron",
+  center: [-81.55, 38.32],
+  zoom: 9,
+});
+map.addControl(new maplibregl.NavigationControl(), "top-right");
+
+function buildOverlay() {
+  // Absolute URL from the page's own origin: a RELATIVE pmtiles:// URL also
+  // fails silently. Origin-relative keeps the file deployable to any host.
+  map.addSource("rf", {
+    type: "vector",
+    url: "pmtiles://" + new URL("data/rf.pmtiles", location.href).href,
+  });
+
+  map.addLayer({
+    id: "hexes", type: "fill", source: "rf", "source-layer": "hexes",
+    paint: { "fill-color": MODES.rsrp.paint, "fill-opacity": 0.62,
+             "fill-outline-color": "rgba(0,0,0,0.12)" },
+  });
+  map.addLayer({
+    id: "hex-hover", type: "line", source: "rf", "source-layer": "hexes",
+    paint: { "line-color": "#000", "line-width": 2 },
+    filter: ["==", ["get", "h3"], ""],
+  });
+  map.addLayer({
+    id: "towers", type: "circle", source: "rf", "source-layer": "towers",
+    paint: {
+      "circle-radius": ["interpolate", ["linear"], ["coalesce", ["get","h"], 45],
+                        20, 2.5, 100, 5, 300, 9],
+      "circle-color": "#ffffff", "circle-stroke-color": "#333",
+      "circle-stroke-width": 1,
+    },
+  });
+  map.addLayer({
+    id: "sites", type: "circle", source: "rf", "source-layer": "sites",
+    paint: { "circle-radius": 7, "circle-color": "#ffd166",
+             "circle-stroke-color": "#000", "circle-stroke-width": 1.5 },
+  });
+  map.addLayer({
+    id: "site-rank", type: "symbol", source: "rf", "source-layer": "sites",
+    // text-font MUST name a font the basemap's glyph server actually has
+    // (OpenFreeMap serves Noto). Omitting it falls back to "Open Sans
+    // Regular", the glyph request 404s, and the unresolved dependency wedges
+    // EVERY tile of this source -- all five layers blank, fills included, no
+    // error surfaced. This one missing line was the whole "map renders
+    // nothing" failure.
+    layout: { "text-field": ["to-string", ["get", "rank"]],
+              "text-font": ["Noto Sans Regular"],
+              "text-size": 10, "text-offset": [0, -1.3] },
+    paint: { "text-halo-color": "#fff", "text-halo-width": 1.5 },
+  });
+
+  const mode = document.querySelector('input[name="mode"]:checked');
+  setMode(mode ? mode.value : "rsrp");
+}
+
+map.on("load", () => {
+  buildOverlay();
+
+  const modes = document.getElementById("modes");
+  Object.entries(MODES).forEach(([key, m], i) => {
+    const label = document.createElement("label");
+    label.innerHTML = `<input type="radio" name="mode" value="${key}"
+                       ${i === 0 ? "checked" : ""}> ${m.label}`;
+    modes.appendChild(label);
+  });
+  modes.addEventListener("change", e => setMode(e.target.value));
+
+  document.getElementById("towers-toggle").addEventListener("change", e =>
+    map.setLayoutProperty("towers", "visibility", e.target.checked ? "visible" : "none"));
+  document.getElementById("sites-toggle").addEventListener("change", e => {
+    for (const id of ["sites", "site-rank"])
+      map.setLayoutProperty(id, "visibility", e.target.checked ? "visible" : "none");
+  });
+
+  map.on("click", "hexes", e => showHex(e.features[0].properties));
+  map.on("mousemove", "hexes", e => {
+    map.getCanvas().style.cursor = "pointer";
+    map.setFilter("hex-hover", ["==", ["get", "h3"], e.features[0].properties.h3]);
+  });
+  map.on("mouseleave", "hexes", () => {
+    map.getCanvas().style.cursor = "";
+    map.setFilter("hex-hover", ["==", ["get", "h3"], ""]);
+  });
+  map.on("click", "towers", e => {
+    const p = e.features[0].properties;
+    new maplibregl.Popup().setLngLat(e.lngLat)
+      .setHTML(`<b>ASR ${p.asr}</b><br>${p.h ?? "?"} m ${p.type ?? "structure"}`)
+      .addTo(map);
+  });
+  map.on("click", "sites", e => {
+    const p = e.features[0].properties;
+    new maplibregl.Popup().setLngLat(e.lngLat)
+      .setHTML(`<b>Recommended site #${p.rank}</b><br>${p.kind}, ${p.h} m mast` +
+               `<br>+${Number(p.gain).toLocaleString()} demand newly covered`)
+      .addTo(map);
+  });
+});
+
+function setMode(key) {
+  if (map.getLayer("hexes"))
+    map.setPaintProperty("hexes", "fill-color", MODES[key].paint);
+  const lg = document.getElementById("legend");
+  lg.innerHTML = MODES[key].legend.map(([c, t]) =>
+    `<div><span class="swatch" style="background:${c}"></span>${t}</div>`).join("");
+}
+
+function showHex(p) {
+  const el = document.getElementById("info");
+  const covered = p.covered === true || p.covered === "true";
+  const rows = [
+    ["Signal", p.rsrp !== undefined ? `${p.rsrp} dBm ${covered ? "(covered)" : "(gap)"}`
+                                    : "no plausible link at all"],
+    ["People here", Number(p.pop).toLocaleString()],
+    ["Serving tower", p.srv_asr
+       ? `ASR ${p.srv_asr} &middot; ${p.srv_h ?? "?"} m mast &middot; ` +
+         `${p.srv_km} km &middot; ${p.srv_los === true || p.srv_los === "true"
+            ? "line of sight" : "terrain-obstructed"}`
+       : "none in range"],
+    ["Towers above threshold", p.n_srv],
+    ["Tree cover", `${p.tree}%`],
+    ["Terrain relief", `${p.relief} m in this cell`],
+    ["Buildings", p.bldg_max > 0
+       ? `mean ${p.bldg_mean} m, tallest ${p.bldg_max} m` : "none mapped"],
+  ];
+
+  // The sentence the map exists for: which term is costing this cell.
+  const why = [];
+  if (p.srv_los === false || p.srv_los === "false")
+    why.push("the path to its serving tower is blocked by terrain");
+  if (p.tree >= 80) why.push(`heavy tree cover (${p.tree}%) adds clutter loss`);
+  if (p.relief >= 150) why.push(`rugged terrain (${p.relief} m of relief) drives diffraction`);
+  if (p.srv_km >= 15) why.push(`the nearest server is far away (${p.srv_km} km)`);
+  if (p.bldg_max >= 15) why.push(`tall buildings (${p.bldg_max} m) shadow street level`);
+  if (p.srv_asr === undefined) why.push("no registered structure is in range at all");
+
+  el.innerHTML = `<h2>Cell ${p.h3}</h2>
+    <table>${rows.map(([k, v]) => `<tr><td>${k}</td><td><b>${v}</b></td></tr>`).join("")}</table>
+    ${why.length ? `<div class="why">Why signal is limited here: ${why.join("; ")}.</div>`
+                 : covered ? `<div class="why">Well served.</div>` : ""}`;
+  el.style.display = "block";
+}
+</script>
+</body>
+</html>

@@ -68,8 +68,9 @@ map:
 tiles:
 	bash scripts/make_tiles.sh
 
+# PMTiles needs HTTP range requests, which python -m http.server does not do.
 web-serve:
-	$(VENV)/python -m RangeHTTPServer 8000 --directory web
+	cd web && ../$(VENV)/python -m RangeHTTPServer 8000
 
 ## --- image ------------------------------------------------------------------
 
