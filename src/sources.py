@@ -27,7 +27,7 @@ from pathlib import Path
 
 import requests
 
-from config import DATA_DIR, GRID, RF, SOURCES, STATE, scope
+from config import DATA_DIR, GRID, RF, SITING, SOURCES, STATE, scope
 
 RAW_DIR = DATA_DIR / "raw"
 
@@ -116,6 +116,27 @@ def grid_spec(geom) -> dict:
         "cell_m": cell,
         "crs": int(GRID["crs"]),
     }
+
+
+def nrqz():
+    """The National Radio Quiet Zone as a polygon in EPSG:5070.
+
+    Constructed, not fetched: 47 CFR 1.924 defines the zone as a lat/lon
+    rectangle and NRAO publishes it only as a KMZ, so the four corners live in
+    config.yml where a reader can check them against the regulation.
+
+    Segmentized BEFORE the transform, because a rectangle in EPSG:4269 is not
+    one in Albers. The meridians stay straight, but joining the north and south
+    corners with straight lines in EPSG:5070 cuts 461 m out of the middle of
+    each -- five times the 90 m analysis grid, and 105 km2 of the zone wrongly
+    left outside it. 0.05 degree segments bring that to 0.27 m. Same reason
+    02_terrain.py passes densify_pts to transform_bounds.
+    """
+    import geopandas as gpd
+    import shapely
+
+    box = shapely.segmentize(shapely.box(*SITING["nrqz_bounds_4269"]), 0.05)
+    return gpd.GeoSeries([box], crs=4269).to_crs(GRID["crs"]).iloc[0]
 
 
 def gdal_path(uri: str) -> str:

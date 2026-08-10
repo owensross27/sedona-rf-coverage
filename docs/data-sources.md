@@ -83,9 +83,15 @@ download is interactive enough that it is the one manual step in the pipeline
 — which is why the build plan starts it on day one. Scoped to two carriers,
 4G LTE, West Virginia only.
 
-**Ookla Open Data.** `s3://ookla-open-data/parquet/performance/type=mobile/year=2026/quarter=2/`
-— verified, parquet, zoom-16 web-mercator tiles (~600 m, close to a 1:1 match
-with H3 r8). Published quarterly about 5–6 weeks after quarter close.
+**Ookla Open Data.** `s3://ookla-open-data/parquet/performance/type=mobile/year=2026/quarter=2/2026-04-01_performance_mobile_tiles.parquet`
+— read live 2026-08-10: one file, 186,254,189 bytes, **3,382,642 rows**
+globally, columns `quadkey, tile, tile_x, tile_y, avg_d_kbps, avg_u_kbps,
+avg_lat_ms, avg_lat_down_ms, avg_lat_up_ms, tests, devices, quarter, type,
+year`. Rows are zoom-16 web-mercator tiles — **479 m across at 38.4 N**, not
+the ~600 m quoted at the equator, so roughly three land in each H3 r8 hex.
+`tile_x`/`tile_y` are Ookla's own precomputed tile centroids, which is why
+`src/10_ookla.py` never parses the `tile` WKT. Published quarterly about 5–6
+weeks after quarter close.
 
 > **Licence constraint: CC BY-NC-SA 4.0, non-commercial only.** Fine for this
 > portfolio project. Anyone reusing this pipeline commercially must drop the

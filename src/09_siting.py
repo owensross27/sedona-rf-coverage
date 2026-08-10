@@ -43,11 +43,13 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import shapely
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import DEMAND, GRID, RF, SITING, scope  # noqa: E402
 from session import assert_versions, get_sedona, out_path  # noqa: E402
+from sources import nrqz  # noqa: E402
 
 links05 = importlib.import_module("05_links")
 coverage06 = importlib.import_module("06_coverage")
@@ -422,13 +424,24 @@ def main() -> int:
     out["selected_exact"] = out["cand_id"].isin(set(ex.get("sites", [])))
     out["gap_cells_served"] = out["cand_id"].map(
         lambda c: len(cover[c]) if c in cover else 0)
-    # ⚠️ S21 (the NRQZ polygon) is not built, so nothing here has been checked
-    # against the Quiet Zone. Written as null, never as False: claiming a site
-    # is outside the NRQZ without looking is the kind of quiet lie this project
-    # exists not to tell. config.yml pre-registers nrqz_policy: flag.
-    out["nrqz"] = pd.array([None] * len(out), dtype="boolean")
-    print("\n⚠️ NRQZ not evaluated -- S21 (the boundary polygon) does not exist "
-          "yet, so `nrqz` is null, not false, on every candidate")
+    # S21. A real point-in-polygon test against the zone built in sources.nrqz()
+    # from the four corners in 47 CFR 1.924, replacing the null placeholder this
+    # line used to carry. Plain bool, so createDataFrame has a type to infer.
+    #
+    # The distance term is not decoration. At demo scope (Kanawha) the honest
+    # answer is zero flagged, and a bare zero is indistinguishable from a check
+    # that never ran -- the nearest candidate being ~51 km outside the boundary
+    # is what proves it did. The constraint only bites at SCOPE=state.
+    zone = nrqz()
+    xy = shapely.points(out["x"].to_numpy(), out["y"].to_numpy())
+    out["nrqz"] = shapely.contains_xy(zone, out["x"].to_numpy(),
+                                      out["y"].to_numpy())
+    km_to_zone = float(shapely.distance(xy, zone).min()) / 1000.0
+    print(f"\nNRQZ: {int(out.loc[out['selected_greedy'], 'nrqz'].sum())} of "
+          f"{len(picks)} chosen sites inside the Quiet Zone, "
+          f"{int(out['nrqz'].sum())} of {len(out)} candidates; nearest "
+          f"candidate {km_to_zone:,.0f} km from the boundary (0 = inside). "
+          "Flagged, never dropped -- config.yml nrqz_policy: flag")
 
     dest = out_path("gold", "siting")
     sedona.createDataFrame(out).write.mode("overwrite").parquet(dest)

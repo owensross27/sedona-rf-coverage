@@ -22,7 +22,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 towers = importlib.import_module("01_towers")
 terrain = importlib.import_module("02_terrain")
-from sources import gdal_path, grid_spec  # noqa: E402
+ookla = importlib.import_module("10_ookla")
+from sources import gdal_path, grid_spec, nrqz  # noqa: E402
 
 CHECKS = []
 
@@ -109,6 +110,50 @@ def test_gdal_path_rewrites_only_the_s3a_scheme():
     assert gdal_path("s3a://bucket/cog/dem.tif") == "/vsis3/bucket/cog/dem.tif"
     assert gdal_path("/local/dem.tif") == "/local/dem.tif"
     assert gdal_path("s3://bucket/dem.tif") == "s3://bucket/dem.tif"
+
+
+@check
+def test_nrqz_contains_green_bank_and_excludes_charleston():
+    """The Quiet Zone is built from four numbers in config.yml, never fetched,
+    so nothing external would catch a transposed corner or a dropped minus
+    sign. The failure mode is a legal siting constraint applied silently to
+    the wrong half of the state, on a map that still looks right.
+
+    Green Bank is the observatory the zone exists to protect and must be
+    inside it. Charleston is 150 km west and must not be."""
+    from pyproj import Transformer
+
+    zone = nrqz()
+    to_5070 = Transformer.from_crs(4326, 5070, always_xy=True)
+    assert shapely.contains_xy(zone, *to_5070.transform(-79.8398, 38.4331))
+    assert not shapely.contains_xy(zone, *to_5070.transform(-81.6326, 38.3498))
+
+
+@check
+def test_nrqz_area_matches_the_published_figure():
+    """~13,000 square miles is the figure NRAO and the FCC filings quote, and
+    it is the only independent check available on a boundary transcribed by
+    hand from 47 CFR 1.924 -- one wrong degree moves it by thousands."""
+    sq_mi = nrqz().area / 1e6 / 2.58999
+    assert 12_900 < sq_mi < 13_300, sq_mi
+
+
+@check
+def test_quadkey_prefix_filter_selects_west_virginia_and_nothing_else():
+    """The Ookla tile filter is pure arithmetic and its failure mode is
+    silent: a wrong bit interleaving returns a different continent's tiles and
+    the stage runs happily on them. "213" is Microsoft's own worked example
+    for tile (3,5) at zoom 3, which pins the digit order; the rest pins the
+    window over West Virginia."""
+    assert ookla._quadkey(3, 5, 3) == "213"
+    chs = ookla.quadkey_at(-81.6326, 38.3498, 16)     # Charleston WV
+    gbk = ookla.quadkey_at(-79.8398, 38.4331, 16)     # Green Bank WV
+    sfo = ookla.quadkey_at(-122.4200, 37.7700, 16)    # San Francisco
+    assert len(chs) == 16 and chs.startswith("0320"), chs
+    pre = ookla.prefixes_for((-82.65, 37.20, -77.72, 40.64))
+    z = ookla.PREFIX_ZOOM
+    assert chs[:z] in pre and gbk[:z] in pre, pre
+    assert sfo[:z] not in pre, (sfo, pre)
 
 
 if __name__ == "__main__":

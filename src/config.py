@@ -18,6 +18,7 @@ DEMAND = CFG["demand"]
 SITING = CFG["siting"]
 BUILDINGS = CFG["buildings"]
 DQ = CFG["dq"]
+VALIDATION = CFG["validation"]
 SOURCES = CFG["sources"]
 
 DATA_DIR = REPO_ROOT / "data"

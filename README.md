@@ -72,7 +72,13 @@ a population raster:
 - **The National Radio Quiet Zone.** A 13,000 square mile federal zone around
   the Green Bank Observatory where new transmitters require coordination. It
   is a real legal constraint on where a tower can go, and the optimizer treats
-  it as one — candidates inside it are flagged, never silently dropped.
+  it as one — candidates inside it are flagged, never silently dropped. The
+  boundary is constructed from the four corners in 47 CFR 1.924 rather than
+  fetched (NRAO publishes only a KMZ), and the constructed polygon encloses
+  13,108 sq mi against the ~13,000 published — the one independent check
+  available on a hand-transcribed boundary. Demo scope is Kanawha County, 51 km
+  west of it, so the demo run flags nothing; the constraint binds at
+  `SCOPE=state`.
 - **Population moving in two directions at once.** The Eastern Panhandle is
   growing as a DC exurb while the southern coalfields decline. A single
   statewide growth figure would hide both.
@@ -176,7 +182,7 @@ flowchart LR
     end
     subgraph gh["GitHub (free)"]
         repo["repository"]
-        ci["Actions CI: 37 checks +<br/>throughput gate, arm64"]
+        ci["Actions CI: 40 checks +<br/>throughput gate, arm64"]
         pages["GitHub Pages"]
     end
     browser["Browser: MapLibre +<br/>PMTiles, no server"]
@@ -320,7 +326,7 @@ line-of-sight flag flips at the computed horizon.
 
 ```bash
 make setup   # uv venv, python 3.11, pinned pyspark 3.5.3 + sedona 1.9.1
-make test    # 37 correctness checks, no framework, no network
+make test    # 40 correctness checks, no framework, no network
 make bench   # throughput gate
 make demo    # one county end to end, local Spark, writes to ./data
 make map     # the two figures above, from your own run's outputs
@@ -426,13 +432,15 @@ Stated up front rather than discovered by a reader. The quantified ones are in
 
 | Gate | Status |
 |---|---|
-| Kernel correctness (`make test`) | **37/37 passing** — physics anchors (J(0)=6.02 dB, radio horizon, flat ground costs nothing), coverage weighting, optimizer-vs-MILP on a known instance |
+| Kernel correctness (`make test`) | **40/40 passing** — physics anchors (J(0)=6.02 dB, radio horizon, flat ground costs nothing), coverage weighting, optimizer-vs-MILP on a known instance |
 | Kernel throughput (`make bench`) | **passing, 94x margin** |
 | `make demo`, one county end to end | **passing, exit 0** — nine stages, ~15 min on a laptop |
 | DQ gate fails non-zero on bad input | **verified both ways** — tampered thresholds exit 1 naming the failed checks |
 | Building-height model vs pre-registered baseline | **reported side by side**, baseline reproducible bit for bit |
 | Sedona zonal stats vs independent rasterio recompute | **agrees** (asserted in stage 08) |
-| Model vs FCC BDC and Ookla | not yet — the next milestone |
+| NRQZ boundary | **verified** — Green Bank inside, Charleston outside, and 13,108 sq mi against the ~13,000 published |
+| Model vs Ookla speedtests | **run, and the answer is "not usable at demo scope"** — only 1.8% of *covered* hexes carry speedtests, so the sample cannot discriminate. The stage refuses to quote the number. See `docs/validation.md` |
+| Model vs FCC BDC | not yet — the next milestone |
 | Statewide run on EKS | not yet |
 
 ## Data

@@ -114,6 +114,68 @@ the weight's magnitude and entirely dependent on tourism being counted at
 all. Anyone using the site list should decide which world they are building
 for.
 
+## The National Radio Quiet Zone boundary (measured 2026-08-10)
+
+Constructed from the four corners in 47 CFR 1.924 rather than from NRAO's KMZ,
+so the transcription is the thing that can be wrong. Two checks, both offline
+in `tests/test_bronze.py`: Green Bank falls inside and Charleston does not, and
+the constructed polygon encloses **13,108 sq mi** against the ~13,000
+published. One wrong degree moves that by thousands.
+
+Reprojection to EPSG:5070 is **densified at 0.05° before the transform**. The
+parallels bow in Albers: joining the north and south corners with straight
+lines cuts **461 m** out of the middle of each edge — five times the 90 m
+analysis grid — and would silently leave a 105 km² strip of the zone
+unflagged. Densified, the error is 0.27 m. The meridians are straight in Albers
+and need nothing.
+
+At demo scope **0 of 609 candidates are inside; the nearest is 51 km west of
+the boundary**, and the stage prints that distance precisely so a zero cannot
+be mistaken for a check that never ran. The constraint is exercised only at
+`SCOPE=state`, where Pocahontas, Randolph, Pendleton, Greenbrier and Grant
+counties fall inside the zone.
+
+## Ookla: measured, and the result is "not usable at this scope" (2026-08-10)
+
+The false-negative rate on gap calls was computed at demo scope with the
+thresholds pre-registered in `config.yml` (`ookla_min_tests: 5`,
+`ookla_min_devices: 2`, committed before the number existed). The result:
+
+| | |
+|---|---|
+| Sample density in scope | **224 of 3,345 hexes (6.7%)** contain any speedtest at all |
+| Gap hexes with speedtests | 0 of 1,092 (0.0%) |
+| Covered hexes with speedtests | 40 of 2,253 (1.8%) — the control |
+
+**The control is what kills it.** Hexes the model calls *covered* carry
+speedtests at only 1.8%, so the sample cannot discriminate covered from
+uncovered ground, and the 0.0% is a statement about Ookla's sample density in a
+mostly-forested county rather than about this model. `10_ookla.py` prints a
+`VERDICT: NOT USABLE at this scope` and refuses to present the number as
+validation. Re-run at `SCOPE=state`, where the denominator is ~25x larger.
+
+This is the reason the control is computed at all. Without it, "0.0% of our gap
+calls are contradicted by real-world speedtests" is a sentence that reads like
+a triumph and means nothing.
+
+Two ways the metric lies, both live at once even when the sample is adequate:
+
+- **Reads too high.** A test served by a rooftop or small-cell site is real
+  service that the ASR registry never lists, so the number measures the model
+  and the tower list jointly. A test carried by mid-band 5G is service, but not
+  the 700 MHz LTE this model predicts. Ookla aggregates a whole quarter, so one
+  moment of service anywhere in a tile counts, against a steady-state
+  prediction with an 8 dB margin.
+- **Reads too low, and this dominates.** Gap cells here average 0.97 tree cover
+  and 156 m of relief — mostly nobody is there to test. And the selection
+  effect runs the wrong way by construction: **someone with no signal cannot
+  complete a speedtest**, so the population whose missing coverage we most want
+  to confirm is exactly the one that cannot appear in the numerator.
+
+So the honest claim is one-sided: *at least F% of gap calls are demonstrably
+wrong; the true rate is unknown and unbounded above.* Never "the model is F%
+wrong".
+
 ## Planned: external validation (statewide)
 
 Two ground truths, used asymmetrically because they prove different things:
@@ -121,10 +183,8 @@ Two ground truths, used asymmetrically because they prove different things:
 - **FCC BDC mobile coverage polygons** (per-carrier, 4G LTE): full-coverage
   claims, so they support IoU and a confusion matrix against the modelled
   surface, at the BDC's own -105 dBm reference threshold.
-- **Ookla open data**: crowdsourced speedtests prove *presence* of service
-  and can never prove absence — an empty tile may simply hold no people. Used
-  for exactly one claim: the false-negative rate on gap calls (of the cells
-  this model calls uncovered, how many have real-world tests in them).
+- **Ookla open data**: ingested and run (`make ookla`, stage `10_ookla.py`),
+  and the answer at demo scope is **that it cannot be used yet** — see below.
 - **ASR-BDC reconciliation**, published as a derived dataset: which
   registered structures sit inside carrier coverage consistent with hosting
   the equipment — turning the model's weakest input into its most useful

@@ -10,7 +10,7 @@ ECR_REPO       ?= sedona-rf-coverage
 IMAGE_TAG      ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 ECR_IMAGE       = $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(ECR_REPO):$(IMAGE_TAG)
 
-.PHONY: setup test bench demo pipeline dq surface map tiles web-serve image push preflight \
+.PHONY: setup test bench demo pipeline dq ookla surface map tiles web-serve image push preflight \
         spot-check cluster-up cluster-down nodes-up nodes-down job serve-up dns \
         status check-nat cost destroy-all clean
 
@@ -52,6 +52,16 @@ pipeline:
 
 dq:
 	source scripts/java_env.sh && SCOPE=$(SCOPE) $(VENV)/python src/07_dq.py
+
+# Ookla open data -> bronze/ookla_h3, plus the one validation number it
+# supports. Deliberately NOT in `pipeline`, for the same reason as `surface`
+# and `map` and one more: nothing in 01-09 reads it, it is a validation input,
+# and it is the only CC BY-NC-SA source in the project. A commercial reuser
+# drops this target instead of editing the pipeline. Always statewide -- the
+# scope filter happens at the join, not at the fetch.
+ookla:
+	source scripts/java_env.sh; \
+	SCOPE=$(SCOPE) LOCAL_OUT=$${LOCAL_OUT:-1} $(VENV)/python src/10_ookla.py
 
 # Proves the JDK, pyspark, Sedona jars and ST_* functions all resolve together.
 # Cheapest possible check that the stack is real before any stage runs.

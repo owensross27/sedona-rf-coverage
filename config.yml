@@ -170,6 +170,20 @@ siting:
   # with the Green Bank Observatory, which is a real-world siting cost a
   # coverage model should surface rather than hide.
   nrqz_policy: flag
+  # The zone is a plain lat/lon rectangle in NAD-83, per 47 CFR 1.924.
+  # CONSTRUCTED from these four numbers rather than fetched: NRAO publishes the
+  # boundary only as a KMZ, and four numbers transcribed from the regulation
+  # are more auditable than a reprojected placemark -- nothing to pin, no
+  # release to expire, and the transcription is checkable. As the rule states
+  # it:  west 80 29 59.2 W   east 78 29 59.0 W
+  #      south 37 30 00.4 N  north 39 15 00.4 N
+  # Decimal degrees below as [minx, miny, maxx, maxy], the order geom.bounds
+  # returns. EPSG:4269 (NAD83), which at this precision equals EPSG:4326.
+  #
+  # The check that the transcription is right: these corners enclose 13,108
+  # square miles against the ~13,000 NRAO publishes. One wrong degree moves
+  # that by thousands. Asserted in tests/test_bronze.py.
+  nrqz_bounds_4269: [-80.499778, 37.500111, -78.499722, 39.250111]
 
 dq:
   # Data-quality gate thresholds (07_dq.py exits non-zero on breach).
@@ -178,6 +192,24 @@ dq:
   min_hex_count: 50000         # state scope
   max_rsrp_dbm: -30.0          # a stronger prediction than this is a bug
   min_rsrp_dbm: -200.0
+
+validation:
+  # Ookla open data proves the PRESENCE of service and can never prove its
+  # absence: an empty tile may mean no people, no road and no tester -- not no
+  # signal. So it is used for exactly one number, the false-negative rate on
+  # gap calls: of the hexes this model calls uncovered, the fraction that
+  # nonetheless contain real speedtests. That fraction is a LOWER BOUND on the
+  # error and its complement is not evidence of anything.
+  #
+  # ADDED 2026-08-10, BEFORE the number was computed, per the pre-registration
+  # discipline at the top of this file. "Contains speedtests" needs a
+  # threshold, the threshold moves the answer, and setting it afterwards would
+  # be choosing the result.
+  ookla_min_tests: 5      # one test is a car passing on I-79, not service
+  ookla_min_devices: 2    # ...and twenty tests from one handset is one handset
+  # Reported alongside at these thresholds, so the reader can see how much the
+  # choice above is doing rather than taking it on trust.
+  ookla_test_sensitivity: [1, 5, 20]
 
 paths:
   # s3://<bucket>/<layer>/... -- bucket comes from RF_BUCKET in the
