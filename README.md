@@ -18,6 +18,12 @@ that stays up after the cluster is torn down.
 
 ![Coverage and recommended sites](docs/img/coverage_map.png)
 
+**[Explore the interactive map](https://owensross27.github.io/sedona-rf-coverage/web/)** —
+pan around, switch between signal / coverage / population / tree cover / relief,
+and click any hexagon for why its signal is what it is: the serving tower and
+its height, distance, line of sight, tree cover, terrain relief, and building
+heights. One static PMTiles file served by GitHub Pages; no server anywhere.
+
 ## Headline result (demo scope: Kanawha County)
 
 | Measure | Covered at -105 dBm RSRP |

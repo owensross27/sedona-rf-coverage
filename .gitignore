@@ -1,5 +1,5 @@
-# data never enters git
-data/
+# pipeline outputs never enter git (root-anchored: web/data is handled below)
+/data/
 spark-warehouse/
 metastore_db/
 derby.log
@@ -38,3 +38,8 @@ __pycache__/
 *.parquet
 *.gpkg
 !web/*.pmtiles
+# The demo-scope tiles ship in the repo ON PURPOSE: GitHub Pages serves the
+# interactive map from them with zero infrastructure. 3.4 MB, rebuilt by
+# `make tiles`. State-scope tiles will NOT be committed -- they go to S3.
+web/data/*
+!web/data/rf.pmtiles
