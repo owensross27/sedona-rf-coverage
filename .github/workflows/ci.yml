@@ -1,0 +1,26 @@
+# The offline correctness gate, on the same architecture as the cluster.
+#
+# Deliberately narrow: make test needs no network, no JVM, no credentials, so
+# it runs anywhere and fails only when the physics or the arithmetic breaks.
+# The pipeline itself is NOT run here -- it needs a Census key and ~15 min,
+# and CI secrets on a public repo are a liability the repo does not need.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # arm64 runner: the EKS nodes are Graviton and the dev laptop is Apple
+    # Silicon, so x86 CI would be the only x86 in the whole project.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: setup
+        run: make setup
+      - name: correctness gate (37 offline checks)
+        run: make test
+      - name: throughput gate (>= 100k pairs/min/core)
+        run: make bench

@@ -128,7 +128,71 @@ def main() -> int:
     dest.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(dest, dpi=110)
     print(f"wrote {dest}")
+
+    surface_figure()
     return 0
+
+
+def surface_figure() -> None:
+    """Per-pixel propagation, before and after the recommended build.
+
+    Skipped (loudly) when `make surface` has not run: the surfaces are a
+    ~100M-link computation this figure script must not trigger as a side
+    effect.
+    """
+    import matplotlib.pyplot as plt
+    import rasterio
+    from config import RF
+    from session import out_path
+
+    paths = {k: out_path("cog", f"rsrp_surface_{k}_5070_90m.tif")
+             for k in ("current", "upgraded")}
+    if not all(Path(p).exists() for p in paths.values()):
+        print("surface figure skipped: run `make surface` first")
+        return
+
+    arrs, nodata = {}, None
+    for k, p in paths.items():
+        with rasterio.open(p) as src:
+            arrs[k] = src.read(1)
+            nodata = src.nodata
+            extent = (src.bounds.left, src.bounds.right,
+                      src.bounds.bottom, src.bounds.top)
+    thr = float(RF["rsrp_threshold_dbm"])
+    mask = arrs["current"] != nodata
+
+    fig, axes = plt.subplots(1, 3, figsize=(19, 7), constrained_layout=True)
+    for ax, key, title in (
+        (axes[0], "current", "Today: 605 registered structures"),
+        (axes[1], "upgraded", "After the recommended 20 sites"),
+    ):
+        a = np.ma.masked_equal(arrs[key], nodata)
+        im = ax.imshow(a, extent=extent, origin="upper", cmap="magma",
+                       vmin=-125, vmax=-60, interpolation="nearest")
+        cov = ((arrs[key] >= thr) & mask).sum() / mask.sum()
+        ax.set_title(f"{title}\n{cov:.1%} of pixels above {thr:.0f} dBm")
+    fig.colorbar(im, ax=axes[:2], shrink=0.7, label="best-server RSRP (dBm)")
+
+    # The delta panel answers the question the first two only imply.
+    newly = mask & (arrs["current"] < thr) & (arrs["upgraded"] >= thr)
+    base = np.where(mask, (arrs["current"] >= thr).astype(float), np.nan)
+    axes[2].imshow(base, extent=extent, origin="upper", cmap="Greys_r",
+                   vmin=-0.6, vmax=1.8, interpolation="nearest")
+    axes[2].imshow(np.ma.masked_where(~newly, newly.astype(float)),
+                   extent=extent, origin="upper", cmap="autumn",
+                   interpolation="nearest")
+    axes[2].set_title(f"Newly covered ground (orange)\n"
+                      f"{newly.sum():,} pixels = {newly.sum() / mask.sum():.1%}"
+                      " of the county")
+    for ax in axes:
+        ax.set_xticks([])
+        ax.set_yticks([])
+    fig.suptitle("Per-pixel propagation at 90 m: every cell runs the full "
+                 "diffraction kernel (terrain, canopy via the DSM, building "
+                 "knife edge)", fontsize=11)
+    dest = REPO_ROOT / "docs" / "img" / "surface.png"
+    fig.savefig(dest, dpi=110)
+    print(f"wrote {dest}")
 
 
 if __name__ == "__main__":

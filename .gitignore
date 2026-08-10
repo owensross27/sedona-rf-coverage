@@ -43,3 +43,5 @@ __pycache__/
 # `make tiles`. State-scope tiles will NOT be committed -- they go to S3.
 web/data/*
 !web/data/rf.pmtiles
+!web/data/rsrp_surface_*.png
+!web/data/surface_meta.json

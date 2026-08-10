@@ -10,7 +10,7 @@ ECR_REPO       ?= sedona-rf-coverage
 IMAGE_TAG      ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 ECR_IMAGE       = $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(ECR_REPO):$(IMAGE_TAG)
 
-.PHONY: setup test bench demo pipeline dq map tiles web-serve image push preflight \
+.PHONY: setup test bench demo pipeline dq surface map tiles web-serve image push preflight \
         spot-check cluster-up cluster-down nodes-up nodes-down job serve-up dns \
         status check-nat cost destroy-all clean
 
@@ -57,6 +57,13 @@ dq:
 # Cheapest possible check that the stack is real before any stage runs.
 smoke:
 	source scripts/java_env.sh && $(VENV)/python scripts/smoke_sedona.py
+
+# Per-pixel propagation surfaces (current towers vs +20 recommended sites)
+# and their web overlays. Not in `pipeline`: a visualization product with a
+# ~100M-link fan-out that nothing downstream consumes.
+surface:
+	source scripts/java_env.sh; SCOPE=$(SCOPE) LOCAL_OUT=$${LOCAL_OUT:-1} DRIVER_MEM=8g $(VENV)/python scripts/make_surface.py
+	SCOPE=$(SCOPE) LOCAL_OUT=$${LOCAL_OUT:-1} $(VENV)/python scripts/make_overlays.py
 
 # Static PNG of the coverage surface and the recommended build. Deliberately
 # not part of `pipeline`: it is a figure, and it must keep working with the

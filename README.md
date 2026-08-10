@@ -1,5 +1,7 @@
 # sedona-rf-coverage
 
+[![ci](https://github.com/owensross27/sedona-rf-coverage/actions/workflows/ci.yml/badge.svg)](https://github.com/owensross27/sedona-rf-coverage/actions/workflows/ci.yml)
+
 Modelling cellular coverage across West Virginia from open data, finding the
 population it misses, and picking the tower sites that would close the most of
 that gap.
@@ -51,6 +53,15 @@ statistics over the input rasters (stage 08):
 The gaps are steep, forested, and essentially uninhabited by structures —
 which is also why the population-weighted number is so much higher than the
 cell-weighted one.
+
+![Per-pixel propagation surfaces](docs/img/surface.png)
+
+The hexagons are the analysis unit; the picture above is the same physics at
+every 90 m pixel (`make surface`, ~100M links in one Spark pass): today's
+best-server RSRP, the surface after the optimizer's 20 recommended sites, and
+the ground those sites newly cover. Per-pixel coverage lands at 67.1% against
+the hex grid's 67.4% — two receiver sets, one model, same answer. Both
+surfaces are also toggleable layers in the interactive map.
 
 ## Why West Virginia
 
@@ -141,6 +152,76 @@ Overture places       ─── 04_grid     → H3 r8 receivers + demand      �
 
 `make demo` runs all nine stages on a laptop with local Spark and no AWS
 account. The same code runs statewide on EKS by changing `SCOPE`.
+
+### Deployment: what runs today
+
+Everything below is built, running, and verified. Nothing here touches a paid
+service — total spend to date is $0.00.
+
+```mermaid
+flowchart LR
+    subgraph open["Open S3 buckets (anonymous)"]
+        dem["Copernicus GLO-30 DSM"]
+        wc["ESA WorldCover"]
+        ov["Overture buildings + places"]
+        fcc["FCC ASR registry"]
+        acs["Census TIGER + ACS"]
+    end
+    subgraph laptop["Laptop (make demo, ~15 min)"]
+        spark["Local Spark + Sedona 1.9.1<br/>9 stages: bronze -> silver -> gold"]
+        kernel["numpy diffraction kernel<br/>(broadcast terrain)"]
+        opt["site optimizer<br/>greedy + HiGHS MILP"]
+        spark --- kernel
+        spark --- opt
+    end
+    subgraph gh["GitHub (free)"]
+        repo["repository"]
+        ci["Actions CI: 37 checks +<br/>throughput gate, arm64"]
+        pages["GitHub Pages"]
+    end
+    browser["Browser: MapLibre +<br/>PMTiles, no server"]
+    open --> spark
+    spark --> tiles["tippecanoe -> rf.pmtiles (3.4 MB)"]
+    tiles --> repo
+    repo --> ci
+    repo --> pages
+    pages --> browser
+```
+
+### Deployment: the statewide plan (not yet built)
+
+The same code at `SCOPE=state` on EKS. Design decisions are made and costed
+(~$21 modelled, worst case ~$35 — see [Cost](#cost)); no cloud resource
+exists yet, and this diagram is a plan, not a claim.
+
+```mermaid
+flowchart LR
+    subgraph open2["Open S3 buckets"]
+        src["same five sources"]
+    end
+    subgraph aws["AWS us-west-2 (ephemeral)"]
+        eks["EKS: Graviton spot nodes<br/>Spark operator, no NAT gateway"]
+        ecr["ECR: baked-jar arm64 image"]
+        s3["S3 RF_BUCKET<br/>bronze/silver/gold + COGs"]
+        eks --> s3
+        ecr --> eks
+    end
+    subgraph serve["Serving (survives teardown)"]
+        pm["statewide PMTiles on S3"]
+        cf["CloudFront + ACM"]
+        pm --> cf
+    end
+    val["Validation: FCC BDC polygons<br/>+ Ookla (IoU, false-negative rate)"]
+    open2 --> eks
+    s3 --> pm
+    s3 --> val
+    cf --> browser2["Browser"]
+    teardown["make destroy-all:<br/>cluster deleted after the run;<br/>the map keeps working"]
+    aws -.-> teardown
+```
+
+The teardown box is the design's central claim: the cluster is a compute
+appliance, not infrastructure. The public map must not notice its absence.
 
 ### Where Sedona does the work
 
