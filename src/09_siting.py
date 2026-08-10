@@ -177,19 +177,26 @@ def coverage_matrix(sedona, cands: pd.DataFrame, gaps: pd.DataFrame, grid
         str(Path(__file__).resolve().parent / "propagation.py"))
     bcast = sedona.sparkContext.broadcast(grid)
 
-    c = sedona.createDataFrame(cands[["cand_id", "x", "y", "tx_height_m"]]
-                               .rename(columns={"cand_id": "asr_id"}))
-    g = sedona.createDataFrame(gaps[["h3_r8", "x", "y"]])
+    # ST_DWithin over EPSG:5070 metres, exactly as 05_links generates its
+    # candidate pairs. Sedona plans this as a partitioned spatial join; a
+    # hand-rolled bounding-box-plus-squared-distance predicate computes the
+    # same set but leaves the optimizer nothing to index on, and it lets the
+    # optimizer and the coverage map drift apart on what "in range" means.
+    c = sedona.createDataFrame(
+        cands[["cand_id", "x", "y", "tx_height_m"]]
+        .rename(columns={"cand_id": "asr_id"})
+    ).selectExpr("asr_id", "tx_height_m", "x", "y", "ST_Point(x, y) AS geom")
+    g = sedona.createDataFrame(gaps[["h3_r8", "x", "y"]]).selectExpr(
+        "h3_r8", "x", "y", "ST_Point(x, y) AS center")
     c.createOrReplaceTempView("cands")
     g.createOrReplaceTempView("gaps")
     pairs = sedona.sql(f"""
         SELECT c.asr_id, g.h3_r8,
-               c.x AS tx_x, c.y AS tx_y, c.tx_height_m,
-               g.x AS rx_x, g.y AS rx_y
+               ST_X(c.geom)   AS tx_x, ST_Y(c.geom)   AS tx_y,
+               c.tx_height_m,
+               ST_X(g.center) AS rx_x, ST_Y(g.center) AS rx_y
         FROM cands c JOIN gaps g
-          ON  ABS(c.x - g.x) <= {MAX_LINK_M}
-          AND ABS(c.y - g.y) <= {MAX_LINK_M}
-          AND POWER(c.x - g.x, 2) + POWER(c.y - g.y, 2) <= {MAX_LINK_M ** 2}
+          ON ST_DWithin(c.geom, g.center, {MAX_LINK_M})
     """).repartition(64)
 
     out = pairs.mapInPandas(links05.make_kernel(bcast),
