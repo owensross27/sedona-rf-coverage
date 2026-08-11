@@ -24,6 +24,21 @@
   #info .why { margin-top: 6px; padding-top: 6px; border-top: 1px solid #ddd; color: #444; }
   #legend { bottom: 24px; right: 10px; padding: 8px 12px; font-size: 11px; }
   .swatch { display: inline-block; width: 10px; height: 10px; margin-right: 4px; border-radius: 2px; }
+  #ask { top: 10px; right: 50px; width: 320px; padding: 10px 12px; }
+  #ask h2 { font-size: 13px; margin: 0 0 6px; }
+  #ask input, #ask textarea {
+    width: 100%; box-sizing: border-box; font: inherit; font-size: 12px;
+    border: 1px solid #ccc; border-radius: 4px; padding: 5px; margin: 3px 0;
+  }
+  #ask textarea { resize: vertical; min-height: 46px; }
+  #ask button { font: inherit; font-size: 12px; padding: 4px 10px; cursor: pointer; }
+  #ask .keyline { color: #666; font-size: 11px; margin: 2px 0 6px; }
+  #answer { margin-top: 8px; font-size: 12px; line-height: 1.45; max-height: 40vh; overflow-y: auto; white-space: pre-wrap; }
+  #ask-toggle {
+    position: absolute; top: 10px; right: 10px; z-index: 3; width: 30px; height: 30px;
+    border-radius: 6px; border: none; background: rgba(255,255,255,.95); cursor: pointer;
+    box-shadow: 0 1px 6px rgba(0,0,0,.3); font-size: 15px; line-height: 30px; padding: 0;
+  }
 </style>
 </head>
 <body>
@@ -41,29 +56,79 @@
 <div id="info" class="panel"></div>
 <div id="legend" class="panel"></div>
 
+<button id="ask-toggle" title="Ask about this map">?</button>
+<div id="ask" class="panel" hidden>
+  <h2>Ask about this map</h2>
+  <input id="apikey" type="password" autocomplete="off" spellcheck="false"
+         placeholder="Anthropic API key (sk-ant-...)">
+  <div class="keyline">Your key is kept in this browser's localStorage and sent
+  only to api.anthropic.com. This page is static: there is no server here to
+  send it to. <a href="https://console.anthropic.com/settings/keys"
+  target="_blank" rel="noopener">Get a key</a>.</div>
+  <textarea id="question" placeholder="e.g. why is coverage so bad in the cell I clicked?"></textarea>
+  <button id="asksend">Ask</button>
+  <div id="answer"></div>
+</div>
+
 <script>
 const RSRP_LEGEND = [["#2c105c","-125 dBm"],["#b63679","-105 (threshold)"],
                      ["#fdae78","-85"],["#fcfdbf","-70"]];
+
+// EVERY mode paints EVERY hex layer, roll-ups included. That is only possible
+// because make_web_data.py emits the same property NAMES at r5/r6/r7 as at r8
+// -- including ones that are degenerate at r8, like cell_pct being 0 or 100.
+// The earlier version had a single hardcoded ramp for the roll-ups, so tree
+// cover, relief and population all silently painted the same coverage
+// choropleth at any zoom below the detail level, which reads as a mode
+// switcher that does nothing.
+//
+// What each property means at a roll-up level is in make_web_data.py: counts
+// sum, ground properties take an area mean, and RSRP takes a MEDIAN (never a
+// mean -- dBm is logarithmic, and averaging a strong cell against a dead one
+// invents a comfortable middle for a place with a hole in it).
 const MODES = {
   rsrp: {
     label: "Signal (best-server RSRP)",
-    paint: ["interpolate", ["linear"], ["coalesce", ["get", "rsrp"], -125],
+    // No coalesce to -125: a cell with no link at all has no rsrp, and
+    // painting it as the bottom of the ramp is indistinguishable from a very
+    // weak but real signal. Undefined leaves the fill transparent, which is
+    // honest, and "Coverage vs gap" is the mode that counts those cells.
+    paint: ["interpolate", ["linear"], ["get", "rsrp"],
             -125, "#2c105c", -115, "#711f81", -105, "#b63679",
             -95, "#ee605e", -85, "#fdae78", -70, "#fcfdbf"],
     legend: RSRP_LEGEND,
+    note: z => z ? "Per-cell RSRP." : "Median RSRP of the cells here that have a link.",
   },
   // The two raster entries are appended at runtime by loadSurfaces() -- they
   // exist only when the per-pixel surfaces have been built (make surface).
   covered: {
     label: "Coverage vs gap",
-    paint: ["case", ["get", "covered"], "#7cbf8c", "#d1495b"],
-    legend: [["#7cbf8c","covered"],["#d1495b","gap"]],
+    // cell_pct is 0 or 100 at r8, so this stays the crisp two-colour map it
+    // always was there, and becomes a gradient on the roll-ups for free.
+    paint: ["interpolate", ["linear"], ["get", "cell_pct"],
+            0, "#d1495b", 50, "#edae49", 85, "#c3d17a", 100, "#7cbf8c"],
+    legend: [["#d1495b","0% of ground served"],["#edae49","50%"],
+             ["#c3d17a","85%"],["#7cbf8c","100%"]],
+    note: z => z ? "Covered or gap." : "Share of CELLS served.",
+  },
+  pop_pct: {
+    label: "Population covered",
+    paint: ["interpolate", ["linear"], ["get", "pop_pct"],
+            0, "#d1495b", 50, "#edae49", 85, "#c3d17a", 100, "#7cbf8c"],
+    legend: [["#d1495b","0% of people covered"],["#edae49","50%"],
+             ["#c3d17a","85%"],["#7cbf8c","100%"]],
+    note: () => "Share of PEOPLE served. Blank where nobody lives -- "
+                + "0/0 is not 0% coverage.",
   },
   pop: {
-    label: "Population",
-    paint: ["interpolate", ["linear"], ["sqrt", ["get", "pop"]],
-            0, "#f7fbff", 5, "#c6dbef", 15, "#6baed6", 40, "#2171b5", 80, "#08306b"],
-    legend: [["#f7fbff","0"],["#6baed6","~200"],["#08306b","6000+"]],
+    label: "Population density",
+    // DENSITY, not a count. `pop` sums on the way up, so a raw-count ramp
+    // saturates to solid black two zooms out; people per km2 means the same
+    // thing at every level.
+    paint: ["interpolate", ["linear"], ["sqrt", ["coalesce", ["get", "pop_km2"], 0]],
+            0, "#f7fbff", 5, "#c6dbef", 10, "#6baed6", 22, "#2171b5", 45, "#08306b"],
+    legend: [["#f7fbff","0/km²"],["#c6dbef","25"],["#6baed6","100"],
+             ["#2171b5","500"],["#08306b","2000+"]],
   },
   tree: {
     label: "Tree cover",
@@ -89,23 +154,27 @@ const MODES = {
 // in step with the -Z/-z pairs in scripts/make_tiles.sh: a layer whose band
 // falls outside the zoom range its tiles were built for renders nothing at
 // all, silently.
+// BANDS TIGHTENED. r5 hexagons are 253 km2 -- about 20 km across -- and they
+// used to hold every zoom from 4 to 8, which is every zoom at which West
+// Virginia fits on a screen. The statewide view, the one people actually look
+// at, was therefore drawn in cells that smear whole counties into one colour.
+// r6 (36 km2) now owns that range at 6x the granularity and still only ~1,950
+// cells, and each level hands over two zooms earlier than before.
+//
+// These MUST stay in step with the -Z/-z pairs in scripts/make_tiles.sh: a
+// band outside the zoom range its tiles were built for renders nothing at all,
+// silently. maxzoom is EXCLUSIVE in MapLibre, so the bands butt together with
+// no overlap and no gap.
 const LOD = [
-  { id: "hex5", min: 0,  max: 9,  res: "r5" },
-  { id: "hex6", min: 9,  max: 11, res: "r6" },
-  { id: "hex7", min: 11, max: 13, res: "r7" },
+  // `n` is how many r8 cells one hexagon merges: H3 has 7 children per level,
+  // so 7, 49, 343. Shown to the viewer, because a 253 km2 hexagon summarising
+  // 343 measurements should not look like one measurement.
+  { id: "hex5", min: 0, max: 6,  res: "r5", km2: 253, n: 343 },
+  { id: "hex6", min: 6, max: 9,  res: "r6", km2: 36,  n: 49 },
+  { id: "hex7", min: 9, max: 11, res: "r7", km2: 5.2, n: 7 },
 ];
-const DETAIL_ZOOM = 13;   // r8 and the full click panel from here up
-
-// The roll-up layers show PERCENT OF POPULATION COVERED, not a rolled-up
-// signal level -- see scripts/make_web_data.py on why an averaged RSRP would
-// be a lie. pop_pct is absent where nobody lives (0/0 is not 0% coverage), so
-// it falls back to the share of CELLS covered rather than painting empty
-// ridgelines as the worst places in the state.
-const LOD_PAINT = ["interpolate", ["linear"],
-  ["coalesce", ["get", "pop_pct"], ["get", "cell_pct"], 0],
-  0, "#d1495b", 50, "#edae49", 85, "#c3d17a", 100, "#7cbf8c"];
-const LOD_LEGEND = [["#d1495b", "0% of people covered"], ["#edae49", "50%"],
-                    ["#c3d17a", "85%"], ["#7cbf8c", "100%"]];
+const DETAIL_ZOOM = 11;   // r8 (0.74 km2) and the full click panel from here up
+const HEX_LAYERS = [...LOD.map(l => l.id), "hexes"];
 
 protocol = new pmtiles.Protocol();
 maplibregl.addProtocol("pmtiles", protocol.tile);
@@ -137,7 +206,7 @@ function buildOverlay() {
     map.addLayer({
       id: l.id, type: "fill", source: "rf", "source-layer": l.id,
       minzoom: l.min, maxzoom: l.max,
-      paint: { "fill-color": LOD_PAINT, "fill-opacity": 0.62,
+      paint: { "fill-color": MODES.rsrp.paint, "fill-opacity": 0.62,
                "fill-outline-color": "rgba(0,0,0,0.12)" },
     });
   }
@@ -229,9 +298,11 @@ async function loadSurfaces() {
 // The caption used to hardcode "Demo scope: Kanawha County", which quietly
 // became false the moment a statewide tileset was built. meta.json is written
 // by the same script that writes the tiles, so it cannot disagree with them.
+let META = {};
 async function loadMeta() {
   try {
     const m = await (await fetch("data/meta.json")).json();
+    META = m;
     if (!m.scope_desc) return;
     document.getElementById("note").innerHTML +=
       `<br>${m.scope_desc}, ${Number(m.n_hexes).toLocaleString()} cells.`;
@@ -276,6 +347,18 @@ map.on("style.load", () => {
   map.on("zoom", updateZoomUI);
   updateZoomUI();
 
+  const askPanel = document.getElementById("ask");
+  document.getElementById("apikey").value =
+    localStorage.getItem("rfc_api_key") || "";
+  document.getElementById("ask-toggle").addEventListener("click", () => {
+    askPanel.hidden = !askPanel.hidden;
+    if (!askPanel.hidden) document.getElementById("question").focus();
+  });
+  document.getElementById("asksend").addEventListener("click", ask);
+  document.getElementById("question").addEventListener("keydown", e => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) ask();
+  });
+
   map.on("click", "hexes", e => showHex(e.features[0].properties));
   map.on("mousemove", "hexes", e => {
     map.getCanvas().style.cursor = "pointer";
@@ -303,62 +386,167 @@ map.on("style.load", () => {
 function setMode(key) {
   const m = MODES[key];
   CURRENT_MODE = key;
-  // The roll-up layers carry none of the r8 attributes (no rsrp, no tree, no
-  // relief), so they keep LOD_PAINT under every mode. Only opacity follows,
-  // so the raster surfaces stay visible underneath.
-  for (const l of LOD)
-    if (map.getLayer(l.id))
-      map.setPaintProperty(l.id, "fill-opacity", m.raster ? 0.04 : 0.62);
   for (const id of ["surf_cur", "surf_new"])
     if (map.getLayer(id))
       map.setLayoutProperty(id, "visibility",
                             m.raster && id === key ? "visible" : "none");
-  if (map.getLayer("hexes")) {
-    // Surface modes keep the hexes as a nearly invisible click target so the
-    // explainability panel works on top of the raster.
-    map.setPaintProperty("hexes", "fill-opacity", m.raster ? 0.04 : 0.62);
-    if (!m.raster)
-      map.setPaintProperty("hexes", "fill-color", m.paint);
+  // One ramp, every hex layer. Surface modes drop the fills to a nearly
+  // invisible click target rather than hiding them, so the explainability
+  // panel keeps working on top of the raster.
+  for (const id of HEX_LAYERS) {
+    if (!map.getLayer(id)) continue;
+    map.setPaintProperty(id, "fill-opacity", m.raster ? 0.04 : 0.62);
+    if (!m.raster) map.setPaintProperty(id, "fill-color", m.paint);
   }
   updateZoomUI();
 }
 
-// The legend has to follow the zoom, not just the mode: below DETAIL_ZOOM the
-// map is drawing a population-weighted roll-up, and showing the RSRP ramp
-// there would label a coverage choropleth as a signal-strength one.
+// The legend is now the same at every zoom, because the ramp is. What still
+// changes is WHAT ONE CELL IS: 0.74 km2 at full detail, up to 253 km2 rolled
+// up. That has to be on screen, or a viewer reads a 20 km hexagon as a
+// measurement of a place.
 let CURRENT_MODE = "rsrp";
+function activeLevel() {
+  const z = map.getZoom();
+  if (z >= DETAIL_ZOOM) return { res: "r8", km2: 0.74, detail: true };
+  return LOD.find(l => z >= l.min && z < l.max) || LOD[0];
+}
 function updateZoomUI() {
-  const detail = map.getZoom() >= DETAIL_ZOOM;
-  const legend = detail ? MODES[CURRENT_MODE].legend : LOD_LEGEND;
-  document.getElementById("legend").innerHTML =
-    (detail ? "" : "<div style='margin-bottom:4px;color:#666'>Rolled up</div>") +
-    legend.map(([c, t]) =>
-      `<div><span class="swatch" style="background:${c}"></span>${t}</div>`).join("");
-  document.getElementById("zoomhint").textContent = detail
-    ? "Full detail: every H3 r8 cell. Click one for the full breakdown."
-    : "Zoomed out: cells rolled up, coloured by share of population covered. "
-      + "Zoom in for per-cell signal.";
+  const lvl = activeLevel();
+  const m = MODES[CURRENT_MODE];
+  document.getElementById("legend").innerHTML = (m.legend || []).map(([c, t]) =>
+    `<div><span class="swatch" style="background:${c}"></span>${t}</div>`).join("");
+  const scale = lvl.detail
+    ? `Full detail: one hexagon = one H3 r8 cell, 0.74 km². Click for the breakdown.`
+    : `Rolled up to H3 ${lvl.res}: one hexagon = ${lvl.km2} km², `
+      + `${lvl.n} r8 cells merged. Zoom in for finer.`;
+  const note = m.note ? " " + m.note(lvl.detail) : "";
+  document.getElementById("zoomhint").textContent = scale + note;
+}
+
+// ---- Ask panel -------------------------------------------------------------
+// Bring-your-own-key, called straight from the browser. There is deliberately
+// no proxy: this page is a static file on GitHub Pages, and standing up a
+// server to relay the request would mean either holding somebody's key or
+// paying for everyone's questions. The cost of that choice is that the key
+// lives in localStorage, so it is stated plainly next to the input rather than
+// buried -- and it is the user's own key, going to the vendor's own endpoint.
+//
+// anthropic-dangerous-direct-browser-access is the documented opt-in for
+// exactly this: without it the API refuses browser origins outright.
+const ASK = { model: "claude-sonnet-5", turns: [] };
+let LAST_CELL = null;
+
+function askContext() {
+  const lvl = activeLevel();
+  return {
+    what_this_map_is:
+      "Modelled LTE coverage for West Virginia. Predicted RSRP per H3 cell "
+      + "from FCC ASR tower locations over a Copernicus 30 m DEM, with "
+      + "diffraction over terrain and clutter loss from ESA WorldCover. "
+      + "It is a MODEL, not a measurement, and it is technology-blind: the ASR "
+      + "registry records structures, not which carrier or band is on them.",
+    threshold_dbm: META.threshold_dbm,
+    frequency_mhz: META.frequency_mhz,
+    scope: META.scope_desc,
+    statewide_summary: META.summary,
+    current_view: {
+      colouring_by: MODES[CURRENT_MODE].label,
+      showing: lvl.detail
+        ? "full detail, one hexagon = one H3 r8 cell of 0.74 km2"
+        : `rolled up to H3 ${lvl.res}, one hexagon = ${lvl.km2} km2 `
+          + `merging ${lvl.n} r8 cells`,
+      rollup_rules: lvl.detail ? null
+        : "counts are sums, ground properties are area means, RSRP is a MEDIAN",
+    },
+    selected_cell: LAST_CELL,
+  };
+}
+
+async function ask() {
+  const out = document.getElementById("answer");
+  const key = document.getElementById("apikey").value.trim();
+  const q = document.getElementById("question").value.trim();
+  if (!key) { out.textContent = "Paste an API key first."; return; }
+  if (!q) return;
+  localStorage.setItem("rfc_api_key", key);
+  out.textContent = "Thinking...";
+  ASK.turns.push({ role: "user", content:
+    `Context (JSON):\n${JSON.stringify(askContext(), null, 1)}\n\nQuestion: ${q}` });
+  try {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+      },
+      body: JSON.stringify({
+        model: ASK.model,
+        max_tokens: 900,
+        system:
+          "You answer questions about a modelled RF coverage map of West "
+          + "Virginia. Use only the JSON context provided; if it does not "
+          + "contain the answer, say so rather than guessing. Never present a "
+          + "modelled number as a measurement. Be concise and concrete: cite "
+          + "the actual figures from the context. Two or three short "
+          + "paragraphs at most.",
+        // Only the last few turns: the context block is re-sent every time
+        // and is the bulk of the tokens, so a long history costs a lot and
+        // adds little.
+        messages: ASK.turns.slice(-6),
+      }),
+    });
+    if (!r.ok) {
+      const body = await r.text();
+      out.textContent = `API returned ${r.status}. ${body.slice(0, 300)}`;
+      ASK.turns.pop();
+      return;
+    }
+    const j = await r.json();
+    const text = (j.content || []).filter(c => c.type === "text")
+                                  .map(c => c.text).join("\n");
+    ASK.turns.push({ role: "assistant", content: text });
+    out.textContent = text;
+  } catch (e) {
+    // A failed fetch here is almost always CORS or an offline browser, and
+    // the console message is more useful than the exception's own text.
+    out.textContent = "Request failed: " + e.message
+      + " (check the key, and that the browser can reach api.anthropic.com)";
+    ASK.turns.pop();
+  }
 }
 
 function showRollup(p, res) {
+  LAST_CELL = { level: res, ...p };
   const el = document.getElementById("info");
   const pop = Number(p.pop), gap = Number(p.gap_pop);
   const rows = [
-    ["People here", pop.toLocaleString()],
+    ["People here", `${pop.toLocaleString()} (${p.pop_km2}/km²)`],
     ["In gap cells", `${gap.toLocaleString()} (${pop > 0
         ? (100 * gap / pop).toFixed(1) : "0.0"}%)`],
-    ["Cells covered", `${p.cell_pct}% of ${Number(p.cells).toLocaleString()}`],
+    ["Ground served", `${p.cell_pct}% of ${Number(p.cells).toLocaleString()} cells`],
+    ["Median signal", p.rsrp !== undefined
+        ? `${p.rsrp} dBm (cells with a link)` : "no link anywhere here"],
+    ["Towers in range", `${p.n_srv} per cell on average`],
+    ["Tree cover", `${p.tree}%`],
+    ["Terrain relief", `${p.relief} m per cell`],
+    ["Mean elevation", `${p.elev} m`],
     ["Demand", Number(p.demand).toLocaleString()],
   ];
   el.innerHTML = `<h2>H3 ${res} cell</h2>
     <table>${rows.map(([k, v]) => `<tr><td>${k}</td><td><b>${v}</b></td></tr>`).join("")}</table>
     <div class="why">Aggregated from ${Number(p.cells).toLocaleString()} r8 cells.
-    Signal level is not rolled up: averaging it would hide the gaps.
+    Counts are sums, ground properties are area means, and signal is a
+    <b>median</b> -- never a mean, which would average a strong cell against a
+    dead one and invent a comfortable middle.
     Zoom past ${DETAIL_ZOOM} for per-cell detail.</div>`;
   el.style.display = "block";
 }
 
 function showHex(p) {
+  LAST_CELL = { level: "r8", ...p };
   const el = document.getElementById("info");
   const covered = p.covered === true || p.covered === "true";
   const rows = [

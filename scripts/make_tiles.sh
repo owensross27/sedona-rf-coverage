@@ -10,12 +10,19 @@
 # so the number of features in view stays roughly constant while panning
 # instead of growing sevenfold with every zoom-out.
 #
-#   z4-z8    hex5     H3 r5, ~320 cells statewide
-#   z9-z10   hex6     H3 r6, ~1,950
-#   z11-z12  hex7     H3 r7, ~12,900
-#   z13+     hexes    H3 r8, 88,281 -- full detail, and the only level that
-#                     carries per-cell RSRP (see make_web_data.py on why a
-#                     rolled-up mean RSRP would be a lie)
+#   z4-z5    hex5     H3 r5, ~320 cells statewide.  253 km2, ~20 km across
+#   z6-z8    hex6     H3 r6, ~1,950                  36 km2, ~7.5 km across
+#   z9-z10   hex7     H3 r7, ~12,900                 5.2 km2, ~2.8 km across
+#   z11+     hexes    H3 r8, 88,281 -- full detail   0.74 km2, ~1.1 km across
+#
+# BANDS TIGHTENED 2026-08-11. r5 originally held z4-z8, i.e. every zoom at
+# which West Virginia fits on a screen -- so the statewide view, the one people
+# actually look at, was drawn in 20 km hexagons that smeared whole counties
+# into a single colour. r6 now owns that range: 6x more cells, still only
+# ~1,950, and each level hands over two zooms later than before. r8 arrives at
+# z11 rather than z13, which is the earliest it fits: a z11 tile spans ~19.6 km
+# and holds roughly 450 r8 cells, comfortably inside tippecanoe's size limit,
+# while z10 would put ~1,800 in one tile and start pushing against it.
 #
 # WHY NOT --drop-densest-as-needed, which the demo-scope version used: it keeps
 # low-zoom tiles small by THROWING FEATURES AWAY. On a choropleth that leaves
@@ -46,10 +53,10 @@ TC=(tippecanoe --force --no-tile-compression)
 # map with no error anywhere -- measured, not hypothesised. z4 costs a handful
 # of tiles (320 r5 cells land in one or two) and removes the whole class.
 
-"${TC[@]}" -o "$TMP/hex5.pmtiles"  -Z4  -z8  -l hex5  "$D/hex5.geojsonl"
-"${TC[@]}" -o "$TMP/hex6.pmtiles"  -Z9  -z10 -l hex6  "$D/hex6.geojsonl"
-"${TC[@]}" -o "$TMP/hex7.pmtiles"  -Z11 -z12 -l hex7  "$D/hex7.geojsonl"
-"${TC[@]}" -o "$TMP/hex8.pmtiles"  -Z13 -z13 -l hexes "$D/hexes.geojsonl"
+"${TC[@]}" -o "$TMP/hex5.pmtiles"  -Z4  -z5  -l hex5  "$D/hex5.geojsonl"
+"${TC[@]}" -o "$TMP/hex6.pmtiles"  -Z6  -z8  -l hex6  "$D/hex6.geojsonl"
+"${TC[@]}" -o "$TMP/hex7.pmtiles"  -Z9  -z10 -l hex7  "$D/hex7.geojsonl"
+"${TC[@]}" -o "$TMP/hex8.pmtiles"  -Z11 -z13 -l hexes "$D/hexes.geojsonl"
 # Points are cheap and wanted at every zoom. -r1 keeps every tower rather than
 # thinning by density: a missing tower reads as "no tower there", which is the
 # same class of lie as a dropped hex.

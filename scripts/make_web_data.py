@@ -34,6 +34,10 @@ from session import out_path  # noqa: E402
 
 OUT_DIR = REPO_ROOT / "web" / "data"
 
+# The analysis grid's cell area. Used to turn summed population back into a
+# density so one colour ramp is valid at every roll-up level.
+AREA_R8_KM2 = 0.737
+
 
 def read_dir(path: str) -> pd.DataFrame:
     files = sorted(glob.glob(f"{path}/*.parquet"))
@@ -86,6 +90,20 @@ def hex_layer() -> pd.DataFrame:
                             if pd.notna(r.best_rsrp_dbm) else None,
                     "covered": bool(r.is_covered),
                     "pop": round(r.pop, 1),
+                    # Emitted at r8 too, where they are degenerate (0 or 100,
+                    # and a one-cell density), purely so ONE paint expression
+                    # per mode works at every zoom. The alternative is two
+                    # parallel sets of colour ramps that have to be kept in
+                    # step by hand, and the first one to drift does so
+                    # silently -- the map just quietly recolours.
+                    "cell_pct": 100.0 if r.is_covered else 0.0,
+                    "pop_pct": (100.0 if r.is_covered else 0.0)
+                               if r.pop > 0 else None,
+                    # Density, not a count. `pop` SUMS on the way up, so an r6
+                    # parent holds ~49 r8 cells and any shared ramp built on
+                    # raw counts saturates to solid black two zooms out.
+                    # People per km2 means the same thing at every level.
+                    "pop_km2": round(r.pop / AREA_R8_KM2, 1),
                     "demand": round(r.demand),
                     "n_srv": int(r.n_servers),
                     "srv_asr": r.best_asr_id,
@@ -121,12 +139,29 @@ def lod_layers(df: pd.DataFrame) -> dict[str, int]:
     every r8 cell has exactly one parent at each coarser level, so the union
     still tiles the state with no gaps.
 
-    The aggregate is POPULATION-WEIGHTED COVERAGE and SUMMED population.
+    EVERY map mode is rolled up, not just coverage -- a roll-up that carried
+    only population left the tree-cover, relief and signal modes painting the
+    same coverage choropleth at every zoom below 13, which looks exactly like
+    a broken mode switcher.
 
-    Never a mean RSRP. Averaging a strong -70 dBm cell against a no-signal one
-    yields a comfortable middle number for a place with a hole in it, and the
-    hole is the entire point of the map. RSRP stays at r8, where it is a real
-    per-cell value rather than an artifact of the aggregation.
+    Each measure gets the aggregate its own units justify, and they are NOT
+    interchangeable:
+
+    - population and demand SUM. They are counts; a parent holds the total.
+    - coverage is POPULATION-WEIGHTED (`pop_pct`) and also reported as a plain
+      share of cells (`cell_pct`), because those answer different questions:
+      "what fraction of people here can get service" versus "what fraction of
+      the ground is served". In rural WV they diverge sharply.
+    - tree cover, built fraction and relief take a plain MEAN over child cells.
+      Every H3 cell at a given resolution has the same area, so an unweighted
+      mean over children IS the area mean -- no weighting needed.
+    - RSRP takes the MEDIAN, never the mean, and only ever the median.
+      dBm is logarithmic, so an arithmetic mean of dBm is not the mean of
+      anything physical; worse, averaging a strong -70 cell against a
+      no-signal one yields a comfortable middle number for a place with a hole
+      in it. The median is the typical cell and cannot be dragged up by a few
+      very strong ones: if most of a parent is in a gap, its median is below
+      threshold, which is the truth the map exists to show.
     """
     import h3
 
@@ -145,6 +180,20 @@ def lod_layers(df: pd.DataFrame) -> dict[str, int]:
             demand=("demand", "sum"),
             cells=("h3_str", "size"),
             cov_cells=("is_covered", "sum"),
+            # Physical properties of the ground: plain mean over equal-area
+            # children. pandas skips NaN, so cells the zonal-stats stage could
+            # not fill do not drag the average to zero.
+            tree=("tree_frac", "mean"),
+            built=("built_frac", "mean"),
+            relief=("relief_m", "mean"),
+            elev=("elev_mean_m", "mean"),
+            n_srv=("n_servers", "mean"),
+            # Median, for the reason in the docstring. Cells with no plausible
+            # link at all are NaN here and pandas drops them, so this is the
+            # median of cells that HAVE a link -- `pop_pct` and `cell_pct` are
+            # what carry the no-link cells, and the two are meant to be read
+            # together.
+            rsrp=("best_rsrp_dbm", "median"),
         )
         # The invariant that makes this honest: nothing is lost on the way up.
         # A roll-up that drops cells produces a hole indistinguishable from an
@@ -177,9 +226,42 @@ def lod_layers(df: pd.DataFrame) -> dict[str, int]:
                         "cell_pct": round(100.0 * r.cov_cells / r.cells, 1),
                         "cells": int(r.cells),
                         "demand": round(r.demand),
+                        # Over the ground the children actually cover, not the
+                        # parent hexagon's nominal area: parents on the state
+                        # border are only partly filled, and dividing by the
+                        # nominal area would understate their density.
+                        "pop_km2": round(r.pop / (r.cells * AREA_R8_KM2), 1),
+                        # Same property NAMES as the r8 layer, so one paint
+                        # expression per mode works at every zoom instead of
+                        # the client keeping two parallel sets of ramps in
+                        # step by hand.
+                        "rsrp": round(r.rsrp, 1) if pd.notna(r.rsrp) else None,
+                        "tree": round(r.tree * 100.0) if pd.notna(r.tree) else None,
+                        "built": round(r.built * 100.0) if pd.notna(r.built) else None,
+                        "relief": round(r.relief) if pd.notna(r.relief) else None,
+                        "elev": round(r.elev) if pd.notna(r.elev) else None,
+                        "n_srv": round(r.n_srv, 1) if pd.notna(r.n_srv) else None,
                     }) + "\n")
         counts[layer] = len(agg)
     return counts
+
+
+def summarise(df: pd.DataFrame) -> dict:
+    """Headline numbers for the caption and the ask-panel's context block."""
+    cov = df["is_covered"]
+    pop, gap = df["pop"].sum(), df.loc[~cov, "pop"].sum()
+    return {
+        "cells": int(len(df)),
+        "cells_covered_pct": round(100.0 * cov.mean(), 1),
+        "population": int(round(pop)),
+        "population_covered_pct": round(100.0 * (pop - gap) / pop, 1) if pop else None,
+        "population_in_gap_cells": int(round(gap)),
+        "cells_with_no_link": int(df["best_rsrp_dbm"].isna().sum()),
+        # The sharpest number in the dataset and the least obvious: a cell
+        # served by exactly one tower is covered until that tower fails.
+        "covered_cells_with_one_server": int(((df["n_servers"] == 1) & cov).sum()),
+        "median_served_rsrp_dbm": round(float(df.loc[cov, "best_rsrp_dbm"].median()), 1),
+    }
 
 
 def tower_layer() -> int:
@@ -232,7 +314,13 @@ def main() -> int:
             # a fact config.yml already states correctly.
             "scope_desc": sc["description"],
             "n_hexes": len(df),
-            "bounds": df.attrs["bounds"]}
+            "bounds": df.attrs["bounds"],
+            # Headline aggregates, computed here rather than typed into the
+            # page. The ask-panel sends these as context, and a hardcoded
+            # summary would start lying the first time the pipeline is re-run
+            # with a different threshold -- which is precisely the drift that
+            # put "Demo scope: Kanawha County" on a statewide map.
+            "summary": summarise(df)}
     (OUT_DIR / "meta.json").write_text(json.dumps(meta))
     rollup = "  ".join(f"{k}={v}" for k, v in lod.items())
     print(f"wrote {len(df)} hexes ({rollup}), {n_tow} towers, "
