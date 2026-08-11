@@ -74,7 +74,18 @@ managedNodeGroups:
     # Spot reclaim kills executors, which Spark simply re-requests. The driver
     # is pinned to the on-demand `serve` group (see k8s/sparkapplication.yaml)
     # so a reclaim never kills the job itself.
-    spotAllocationStrategy: capacity-optimized
+    #
+    # NO spotAllocationStrategy here, and it is not an omission. That field
+    # lives on NodeGroupInstancesDistribution, which belongs to UNMANAGED
+    # `nodeGroups`; eksctl rejects it on a managedNodeGroup outright --
+    # `unknown field "spotAllocationStrategy"` -- and does so while parsing, so
+    # the whole create aborts before any resource exists. EKS chooses the
+    # strategy for managed spot nodegroups itself, and capacity-optimized (what
+    # this line asked for) is what it picks, so deleting it changes intent not
+    # at all. Verify on the live ASG rather than trusting this comment:
+    #   aws autoscaling describe-auto-scaling-groups --region us-west-2 \
+    #     --query 'AutoScalingGroups[?contains(Tags[?Key==`eks:nodegroup-name`].Value, `spark-spot`)]
+    #              .MixedInstancesPolicy.InstancesDistribution'
     iam:
       attachPolicyARNs:
         - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
