@@ -29,6 +29,10 @@ test:
 	$(VENV)/python tests/test_bronze.py
 	$(VENV)/python tests/test_coverage.py
 	$(VENV)/python tests/test_siting.py
+	# The reaper decides whether to delete a Kubernetes cluster, so its two
+	# gates are worth a gate of their own. Pure stdlib, no boto3, no network:
+	# boto3 is imported inside the handler precisely so this stays runnable.
+	$(VENV)/python infra/terraform/lambda/reaper.py
 
 # The performance gate: >= 100k pairs/min/core before any statewide run.
 bench:
@@ -144,6 +148,22 @@ nodes-down:
 
 cluster-down:
 	eksctl delete cluster --name $(CLUSTER) --region $(AWS_REGION) --wait
+
+# Teardown made atomic with the session, so forgetting is not one of the
+# options. The trap fires on normal exit, on failure, on Ctrl-C and on the
+# terminal closing -- including a cluster-up that died half way, which is
+# exactly when a partial cluster gets abandoned still billing.
+#
+# Do the work in a SECOND terminal; this one only holds the trap open. It is
+# still laptop-bound (a lid closed at the wrong moment defeats it), which is
+# why infra/terraform/reaper.tf exists as the server-side backstop. This target
+# makes the good path automatic; the reaper covers the bad one.
+spike:
+	@trap 'echo "== tearing down"; $(MAKE) cluster-down' EXIT INT TERM HUP; \
+	 $(MAKE) cluster-up nodes-up; \
+	 echo "== cluster ready. Run the job in another shell."; \
+	 echo "== press Enter here (or Ctrl-C) to tear down."; \
+	 read _
 
 STAGE ?= 05
 job:

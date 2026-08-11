@@ -25,6 +25,13 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    # Zips reaper.tf's Lambda source at plan time. Preferred over committing a
+    # .zip: a binary blob in a public repo is unreviewable, and this one is
+    # granted permission to delete clusters.
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.4"
+    }
   }
 }
 

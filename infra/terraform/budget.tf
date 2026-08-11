@@ -63,3 +63,61 @@ resource "aws_budgets_budget" "rf" {
     subscriber_email_addresses = [var.budget_alert_email]
   }
 }
+
+# THE OUTER BACKSTOP -- and it is worth being precise about what it does not do.
+#
+# This is a second budget, not a cap. AWS has no native hard spending limit:
+# every budget in this file sends email and nothing else. The enforcement lives
+# in reaper.tf, which deletes rather than alarms, because the failure this
+# project actually faces sits BELOW this number. A control plane forgotten for
+# two weeks is ~$34 -- under $45, so this budget would stay silent throughout.
+#
+# That is not an argument against it. It is the reason the two are sized
+# differently: $20 is the tripwire for this project going as planned, $45 is
+# for something nobody modelled. Both are free -- AWS bills nothing for the
+# first two budgets in an account, and these are exactly two.
+#
+# Only 100% thresholds here. Intermediate alerts on a backstop would just
+# re-notify at spend levels the $20 budget has already reported on.
+resource "aws_budgets_budget" "hard_cap" {
+  name         = "${var.project}-hard-cap"
+  budget_type  = "COST"
+  limit_amount = tostring(var.hard_cap_usd)
+  limit_unit   = "USD"
+  time_unit    = "MONTHLY"
+
+  # Ordering is the whole point of having two: a backstop at or below the
+  # primary tripwire fires first and makes the pair meaningless. This lives
+  # here rather than in variables.tf because Terraform 1.5.7 forbids a
+  # validation block from referencing another variable.
+  lifecycle {
+    precondition {
+      condition     = var.hard_cap_usd > var.budget_limit_usd
+      error_message = "hard_cap_usd must exceed budget_limit_usd, or the backstop fires before the primary alert."
+    }
+  }
+
+  cost_filter {
+    name   = "Region"
+    values = [var.aws_region]
+  }
+
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 100
+    threshold_type             = "PERCENTAGE"
+    notification_type          = "ACTUAL"
+    subscriber_email_addresses = [var.budget_alert_email]
+  }
+
+  # Fires hours after a runaway starts rather than the 8-12 h ACTUAL lag. On a
+  # backstop this is the only notification with a realistic chance of arriving
+  # while the spend is still preventable.
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 100
+    threshold_type             = "PERCENTAGE"
+    notification_type          = "FORECASTED"
+    subscriber_email_addresses = [var.budget_alert_email]
+  }
+}
