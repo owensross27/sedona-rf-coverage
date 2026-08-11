@@ -82,13 +82,21 @@ fi
 
 # --- nodes up with nothing to do ---------------------------------------------
 echo "== utilisation"
-spark_nodes=$(kubectl get nodes -l workload=spark --no-headers 2>/dev/null | wc -l | tr -d ' ')
+# Nodes already cordoned (SchedulingDisabled) are draining from a scale-down
+# that has been issued. They still bill for another minute or two, but the
+# action has been taken -- flagging them would make this alert fire on every
+# normal teardown, and an alert that cries wolf during routine operation is one
+# that gets ignored exactly when it matters. Counted and reported, not flagged.
+all_spark=$(kubectl get nodes -l workload=spark --no-headers 2>/dev/null | wc -l | tr -d ' ')
+draining=$(kubectl get nodes -l workload=spark --no-headers 2>/dev/null | grep -c 'SchedulingDisabled' || true)
+spark_nodes=$(( ${all_spark:-0} - ${draining:-0} ))
 active=$(kubectl get sparkapplication -A --no-headers 2>/dev/null \
          | grep -cE 'RUNNING|SUBMITTED|PENDING_RERUN' || true)
+[ "${draining:-0}" -gt 0 ] && say "$draining spot node(s) draining (scale-down in flight, still billing briefly)"
 if [ "${spark_nodes:-0}" -gt 0 ] && [ "${active:-0}" -eq 0 ]; then
-  flag "$spark_nodes spot node(s) up with no active SparkApplication -- run 'make nodes-down'"
+  flag "$spark_nodes schedulable spot node(s) with no active SparkApplication -- run 'make nodes-down'"
 else
-  say "spark nodes=$spark_nodes active jobs=$active"
+  say "schedulable spark nodes=$spark_nodes active jobs=$active"
 fi
 
 # --- cluster age -------------------------------------------------------------
