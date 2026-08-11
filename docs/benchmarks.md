@@ -82,6 +82,20 @@ gate (180 m DEM, 64 profile samples, 30 km link radius, each roughly a 2x
 saving). None were used. They are recorded here only so the decision trail is
 legible.
 
+## AWS spend
+
+Pulled from the live us-west-2 billing API on 2026-08-11, the same figure as the
+Cost section of the README.
+
+| Metric | Measured |
+|---|---|
+| Total AWS spend across the project, all time | $1.20 |
+
+Against ~$21 modelled in the build plan. The gap is that the development loop ran
+on the laptop, so most of the hours never reached the cluster. `make status` is
+not the source: it reports an account-wide month-to-date total that includes
+other tenants (see the comment on that target in the Makefile).
+
 ## Pending measurements
 
 These rows are intentionally empty until a real run fills them; see
@@ -91,4 +105,4 @@ These rows are intentionally empty until a real run fills them; see
 |---|---|
 | `RS_Value` per-sample vs broadcast-array kernel | not yet measured |
 | End-to-end pipeline wall clock, SCOPE=state on EKS | not yet measured |
-| EKS spot node-hours and total AWS spend | not yet measured |
+| EKS spot node-hours, SCOPE=state on EKS | not yet measured |

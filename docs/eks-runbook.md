@@ -34,9 +34,15 @@ make image push                 # build, then push to ECR -- ALWAYS in that orde
 make cluster-up                 # ~15 min. Creates the cluster, scales serve to 1,
                                 # installs the operator, loads the Census key Secret
 make nodes-up                   # ~3 min. Scales spark-spot to 3
-make job STAGE=05 SCOPE=state   # submit one stage
+make cloud-pipeline SCOPE=state # all nine stages, one SparkApplication each, in
+                                # order, stopping at the first failure. 01/02/03
+                                # get one executor, the rest get three
 make watch                      # deterministic waste check -- non-zero if billing without progressing
 make cluster-down               # ~10 min. Deletes everything
+make fetch                      # S3 -> ./data (RFC_DATA_DIR). Needs no cluster:
+                                # make_web_data and make_footprints are plain
+                                # pandas by design and cannot read s3a://
+make web SCOPE=state            # tiles, gazetteer and footprints -> web/data
 ```
 
 `make spike` wraps `cluster-up`/`nodes-up` in a shell trap so teardown fires on

@@ -19,7 +19,7 @@
 # which West Virginia fits on a screen -- so the statewide view, the one people
 # actually look at, was drawn in 20 km hexagons that smeared whole counties
 # into a single colour. r6 now owns that range: 6x more cells, still only
-# ~1,950, and each level hands over two zooms later than before. r8 arrives at
+# ~1,950, and each level hands over two zooms earlier than before. r8 arrives at
 # z11 rather than z13, which is the earliest it fits: a z11 tile spans ~19.6 km
 # and holds roughly 450 r8 cells, comfortably inside tippecanoe's size limit,
 # while z10 would put ~1,800 in one tile and start pushing against it.

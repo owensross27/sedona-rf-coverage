@@ -112,7 +112,10 @@ every 90 m pixel (`make surface`, ~100M links in one Spark pass): today's
 best-server RSRP, the surface after the optimizer's 20 recommended sites, and
 the ground those sites newly cover. Per-pixel coverage lands at 67.1% against
 the hex grid's 67.4%: two receiver sets, one model, same answer. Both
-surfaces are also toggleable layers in the interactive map.
+surfaces are toggleable layers in the interactive map when they were built at
+the tileset's own scope. The shipped surfaces are demo scope against a
+statewide tileset, so the map hides both until `make surface SCOPE=state` has
+run on the cluster. See [Limitations](#limitations).
 
 ## Why West Virginia
 
@@ -211,8 +214,9 @@ account. The same code runs statewide on EKS by changing `SCOPE`.
 
 ### Deployment: what runs today
 
-Everything below is built, running, and verified. Nothing here touches a paid
-service, total spend to date is $0.00.
+Everything below is built, running, and verified. This path touches no paid
+service: reproducing it costs $0.00 and needs no AWS account. The statewide
+run in the next section is the only part of the project that spent anything.
 
 ```mermaid
 flowchart LR
@@ -232,13 +236,17 @@ flowchart LR
     end
     subgraph gh["GitHub (free)"]
         repo["repository"]
-        ci["Actions CI: 40 checks +<br/>throughput gate, arm64"]
+        ci["Actions CI: 55 checks +<br/>throughput gate, arm64"]
         pages["GitHub Pages"]
     end
     browser["Browser: MapLibre +<br/>PMTiles, no server"]
     open --> spark
-    spark --> tiles["tippecanoe -> rf.pmtiles<br/>(0.6 MB demo, 12.3 MB statewide)"]
+    spark --> tiles["make web: tippecanoe -> rf.pmtiles<br/>(0.6 MB demo, 22.7 MB statewide)"]
+    spark --> foot["make web: make_footprints.py -> footprints.bin<br/>one transmitter's own reach, read by HTTP Range<br/>(14.6 MB, 1,215,665 records, 2,990 transmitters)"]
+    spark --> gaz["make web: gazetteer() -> places.json<br/>(439 TIGER place names, 13 KB, the search box)"]
     tiles --> repo
+    foot --> repo
+    gaz --> repo
     repo --> ci
     repo --> pages
     pages --> browser
@@ -266,15 +274,19 @@ flowchart LR
         ecr --> eks
     end
     subgraph serve["Serving (survives teardown)"]
-        pm["statewide PMTiles on S3"]
-        cf["CloudFront + ACM"]
-        pm --> cf
+        fetch["make fetch: S3 -> local data dir"]
+        webb["make web SCOPE=state: rf.pmtiles,<br/>footprints.bin, places.json"]
+        repo2["repository (web/data committed)"]
+        pages2["GitHub Pages"]
+        fetch --> webb
+        webb --> repo2
+        repo2 --> pages2
     end
     val["Validation: FCC BDC polygons<br/>+ Ookla (IoU, false-negative rate)"]
     open2 --> eks
-    s3 --> pm
+    s3 --> fetch
     s3 --> val
-    cf --> browser2["Browser"]
+    pages2 --> browser2["Browser"]
     teardown["make destroy-all:<br/>cluster deleted after the run;<br/>the map keeps working"]
     aws -.-> teardown
 ```
@@ -391,7 +403,7 @@ the cluster and the same three steps become:
 ```bash
 make cluster-up nodes-up          # see the cost section before running this
 make cloud-pipeline SCOPE=state   # the same nine stages, one SparkApplication each
-make fetch SCOPE=state            # gold/ and silver/ back down from S3
+make fetch                        # bronze/towers, silver/, gold/ and cog/ back from S3
 make web   SCOPE=state            # tiles + gazetteer + footprints -> web/data
 make cluster-down
 ```
@@ -483,9 +495,10 @@ The parts that cost real time:
 ## Cost
 
 Everything above (every number, map and figure in this README) was produced
-for **under one cent**. The inputs are anonymous open S3 buckets and the demo
-pipeline runs on a laptop. The only standing charge is the container image in
-ECR: **$0.13/month**, for 1.30 GB of compressed layers.
+for **$1.20** of AWS spend, all time. The inputs are anonymous open S3 buckets
+and the demo pipeline runs on a laptop; the statewide EKS run is the only part
+that spent anything. The only standing charge is the container image in ECR:
+**$0.13/month**, for 1.30 GB of compressed layers.
 
 That is worth stating precisely because it is a design outcome, not thrift.
 The cluster is for scale, never for development, so almost all the work
@@ -506,8 +519,9 @@ So `make nodes-up` costs **$0.44/hr**, and a cluster sitting idle still costs
 **$2.40/day**. The second number is the one that actually causes overruns: it
 accrues while nothing is happening and nothing looks wrong.
 
-The statewide run needs roughly 16 control-plane hours and 9 node hours, or
-about **$6.50**: under the $21 originally modelled, because moving the
+The statewide run was modelled at roughly 16 control-plane hours and 9 node
+hours. The bill never reached the model: the **$1.20** above is the measured
+whole-project total against the ~$21 originally modelled, because moving the
 development loop off the cluster removed most of the hours rather than making
 them cheaper.
 
@@ -591,12 +605,23 @@ Stated up front rather than discovered by a reader. The quantified ones are in
 - Deygout over-predicts loss when several edges are of similar prominence, used anyway because the single-knife-edge alternative *under*-predicts in
   multi-ridge terrain, and the direction of error that flatters the result is
   the one to avoid.
+- The per-pixel surface layers are demo scope only today. `make surface` has
+  not been run statewide, so the shipped `surface_meta.json` is demo scope
+  while the tileset is state scope, and the map hides a surface mode whenever
+  those two disagree rather than float a county-sized patch of colour over a
+  state and caption it as the state's signal surface. The statewide map
+  therefore offers six modes where a demo-scope build offers eight.
+- A per-transmitter footprint stops at -115 dBm, 10 dB below the coverage
+  threshold. That is a shipping decision, not a physical edge: 2.29M modelled
+  links clear the -125 dBm floor statewide and 1.20M clear -115, so carrying
+  the tail would nearly double the file to show cells nobody can act on. The
+  boundary of a drawn footprint is the boundary of a contour.
 
 ## Verification
 
 | Gate | Status |
 |---|---|
-| Kernel correctness (`make test`) | **40/40 passing**: physics anchors (J(0)=6.02 dB, radio horizon, flat ground costs nothing), coverage weighting, optimizer-vs-MILP on a known instance |
+| Kernel correctness (`make test`) | **55/55 passing**: physics anchors (J(0)=6.02 dB, radio horizon, flat ground costs nothing), coverage weighting, optimizer-vs-MILP on a known instance, footprint record pack/unpack, reaper decision gates |
 | Kernel throughput (`make bench`) | **passing, 94x margin** |
 | `make demo`, one county end to end | **passing, exit 0**: nine stages, ~15 min on a laptop |
 | DQ gate fails non-zero on bad input | **verified both ways**: tampered thresholds exit 1 naming the failed checks |
@@ -605,7 +630,7 @@ Stated up front rather than discovered by a reader. The quantified ones are in
 | NRQZ boundary | **verified**: Green Bank inside, Charleston outside, and 13,108 sq mi against the ~13,000 published |
 | Model vs Ookla speedtests | **run, and the answer is "not usable at demo scope"**: only 1.8% of *covered* hexes carry speedtests, so the sample cannot discriminate. The stage refuses to quote the number. See `docs/validation.md` |
 | Model vs FCC BDC | not yet, the next milestone |
-| Statewide run on EKS | not yet |
+| Statewide run on EKS | **done**: all nine stages at `SCOPE=state`, 88,281 receiver cells across 55 counties, data-quality gate 8/8, cluster destroyed the same day with an orphan sweep to prove it |
 
 ## Data
 

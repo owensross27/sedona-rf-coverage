@@ -5,7 +5,7 @@
 Three gates, all runnable locally with no cloud account:
 
 ```bash
-make test    # 18 kernel correctness checks, no framework, no network
+make test    # 55 correctness checks, no framework, no network
 make bench   # throughput gate: >= 100k pairs/min/core
 make smoke   # JDK + pyspark + Sedona jars + ST_* functions resolve
 ```

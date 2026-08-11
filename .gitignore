@@ -47,9 +47,10 @@ __pycache__/
 *.parquet
 *.gpkg
 !web/*.pmtiles
-# The demo-scope tiles ship in the repo ON PURPOSE: GitHub Pages serves the
-# interactive map from them with zero infrastructure. 3.4 MB, rebuilt by
-# `make tiles`. State-scope tiles will NOT be committed -- they go to S3.
+# The tiles ship in the repo ON PURPOSE: GitHub Pages serves the interactive
+# map from them with zero infrastructure, and the public map has to keep
+# working after the cluster is deleted. The committed rf.pmtiles is STATE
+# scope, 22.7 MB, rebuilt by `make tiles SCOPE=state`.
 web/data/*
 !web/data/rf.pmtiles
 !web/data/rsrp_surface_*.png

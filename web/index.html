@@ -21,9 +21,12 @@
   /* The two left-hand panels are capped so they cannot collide. They used to
      be free-height and the click panel grew under the controls, overlapping
      it: two stacks of text on top of each other, which reads as a broken
-     page rather than a dense one. 52 + 40 vh leaves room for both. */
+     page rather than a dense one. The click panel gets a fixed budget and the
+     controls get every remaining pixel, rather than both taking a share of the
+     height: a flat 52vh cap starved the controls on a short window and pushed
+     the service-band filters below the fold. */
   #controls { top: 10px; left: 10px; padding: 10px 12px; max-width: 240px;
-              max-height: 52vh; overflow-y: auto; }
+              max-height: calc(100vh - 268px); overflow-y: auto; }
   #controls h1 { font-size: 14px; margin: 0 0 6px; }
   #controls label { display: block; margin: 2px 0; cursor: pointer; }
   #controls .note { color: #777; font-size: 10.5px; line-height: 1.3; margin-top: 5px; }
@@ -42,7 +45,7 @@
   #filters label { font-size: 12px; }
   #filters .n { color: #666; }
   #info { bottom: 24px; left: 10px; padding: 10px 12px; max-width: 300px;
-          display: none; max-height: 40vh; overflow-y: auto; }
+          display: none; max-height: 220px; overflow-y: auto; }
   /* The link budget is the answer to "how was this computed", which is a
      question you ask once. Left expanded it was eight lines of dense prose
      under every click, which buries the six numbers above it. */
@@ -54,6 +57,10 @@
   #info td { padding: 1px 6px 1px 0; vertical-align: top; }
   #info .why { margin-top: 6px; padding-top: 6px; border-top: 1px solid #ddd; color: #444; }
   #legend { bottom: 24px; right: 10px; padding: 8px 12px; font-size: 11px; }
+  #tileerr { top: 10px; left: 50%; transform: translateX(-50%); max-width: 420px;
+             padding: 10px 14px; display: none; font-size: 12px; line-height: 1.4;
+             border-left: 4px solid #d1495b; }
+  #tileerr code { display: block; margin-top: 5px; color: #666; font-size: 11px; }
   .swatch { display: inline-block; width: 10px; height: 10px; margin-right: 4px; border-radius: 2px; }
   #ask { top: 10px; right: 50px; width: 320px; padding: 10px 12px; }
   #ask h2 { font-size: 13px; margin: 0 0 6px; }
@@ -96,6 +103,7 @@
 </div>
 
 <div id="info" class="panel"></div>
+<div id="tileerr" class="panel"></div>
 <div id="legend" class="panel"></div>
 
 <button id="ask-toggle" title="Ask about this map">?</button>
@@ -306,7 +314,7 @@ function buildOverlay() {
     // solid mat of white circles that completely hides the coverage
     // choropleth underneath -- the map stops showing the thing it is for.
     // They only mean anything once you are looking at a region, which is the
-    // same zoom the r6 roll-up takes over at.
+    // same zoom the r7 roll-up takes over at.
     minzoom: 9,
     paint: {
       "circle-radius": ["interpolate", ["linear"], ["coalesce", ["get","h"], 45],
@@ -336,6 +344,26 @@ function buildOverlay() {
 
   const mode = document.querySelector('input[name="mode"]:checked');
   setMode(mode ? mode.value : "rsrp");
+
+  // An empty map must never be a quiet map. If the tileset fails to load, every
+  // control still works, the basemap still draws, and the page looks like a
+  // region with no coverage data rather than a page that failed -- which is the
+  // same class of lie as a dropped hexagon. Measured, not hypothesised: a
+  // sandboxed browser that strips Range headers from worker requests makes
+  // pmtiles fail with exactly this, and the page said nothing at all.
+  map.on("error", e => {
+    const msg = String((e && e.error && e.error.message) || (e && e.message) || e);
+    if (!/pmtiles|byte serving|content-length|rf\.pmtiles/i.test(msg)) return;
+    const el = document.getElementById("tileerr");
+    if (!el || el.style.display === "block") return;
+    el.style.display = "block";
+    el.innerHTML = `<b>The coverage tiles did not load.</b><br>
+      The basemap and the controls are fine; the RF data is missing, so this is
+      an empty map rather than an uncovered state. Usually this means the host
+      answered a byte-range request with the whole file. <br><code>${
+        msg.replace(/[<>&]/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]))
+      }</code>`;
+  });
 }
 
 // Per-pixel propagation surfaces (90 m, terrain shadows visible) as image
