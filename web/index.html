@@ -18,6 +18,11 @@
   #controls h1 { font-size: 14px; margin: 0 0 6px; }
   #controls label { display: block; margin: 2px 0; cursor: pointer; }
   #controls .note { color: #666; font-size: 11px; margin-top: 6px; }
+  #filters { margin-top: 8px; border-top: 1px solid #ddd; padding-top: 6px; }
+  #filters .fhead { font-weight: 600; font-size: 11px; margin-bottom: 3px; }
+  #filters .fhead a { font-weight: 400; color: #06c; text-decoration: none; }
+  #filters label { font-size: 12px; }
+  #filters .n { color: #666; }
   #info { bottom: 24px; left: 10px; padding: 10px 12px; max-width: 300px; display: none; }
   #info h2 { font-size: 13px; margin: 0 0 4px; }
   #info td { padding: 1px 6px 1px 0; vertical-align: top; }
@@ -49,6 +54,11 @@
   <div id="modes"></div>
   <label><input type="checkbox" id="towers-toggle" checked> ASR structures</label>
   <label><input type="checkbox" id="sites-toggle" checked> Recommended sites</label>
+  <div id="filters">
+    <div class="fhead">Service band <a href="#" id="fall">all</a> ·
+      <a href="#" id="fnone">none</a></div>
+  </div>
+  <div class="note" id="fcount"></div>
   <div class="note" id="note">Modelled 700&nbsp;MHz LTE, -105&nbsp;dBm threshold.</div>
   <div class="note" id="zoomhint"></div>
 </div>
@@ -307,6 +317,9 @@ async function loadMeta() {
     document.getElementById("note").innerHTML +=
       `<br>${m.scope_desc}, ${Number(m.n_hexes).toLocaleString()} cells.`;
     if (m.bounds) map.fitBounds(m.bounds, { padding: 24, duration: 0 });
+    // After META lands, not before: the checkbox labels carry the per-band
+    // populations and there is nothing to build without them.
+    buildFilters();
   } catch { /* a map with no caption still works */ }
 }
 
@@ -424,6 +437,86 @@ function updateZoomUI() {
   document.getElementById("zoomhint").textContent = scale + note;
 }
 
+// ---- Service-band filters ---------------------------------------------------
+// Exhaustive and mutually exclusive, worst first. Kept in the same order as
+// BANDS in scripts/make_web_data.py; the labels and counts come from
+// meta.json, so they are computed by the pipeline rather than typed here and
+// cannot drift from the tiles.
+const BANDS = ["no_link", "gap", "single", "multi", "over"];
+let ACTIVE = new Set(BANDS);
+
+// ONE expression for both tile shapes, and they need DIFFERENT rules.
+//
+// At r8 a cell is in exactly one band, so the filter is exact: does `band`
+// match. A rolled-up cell is not in one band -- an r6 hexagon merges 49 r8
+// cells and almost always contains at least one of every band -- so "contains
+// any" would match nearly every hexagon in the state and the filter would look
+// broken while technically working.
+//
+// The roll-up rule is therefore MAJORITY: show a parent when the selected
+// bands account for more than half the PEOPLE in it, falling back to half the
+// cells where nobody lives (0/0 is not a majority of anything). "Mostly
+// uncovered" is the question someone zoomed out is actually asking; the exact
+// per-cell answer is two zooms away and the panel says so.
+function bandFilter() {
+  const on = BANDS.filter(b => ACTIVE.has(b));
+  if (on.length === BANDS.length) return null;          // no filter at all
+  if (!on.length) return ["==", ["literal", 1], ["literal", 0]];  // nothing
+  const sum = pfx => ["+", ...on.map(b => ["coalesce", ["get", pfx + b], 0])];
+  const share = ["case",
+    [">", ["coalesce", ["get", "pop"], 0], 0], ["/", sum("p_"), ["get", "pop"]],
+    [">", ["coalesce", ["get", "cells"], 0], 0], ["/", sum("c_"), ["get", "cells"]],
+    0];
+  return ["any",
+    ["in", ["coalesce", ["get", "band"], ""], ["literal", on]],
+    [">", share, 0.5],
+  ];
+}
+
+function applyFilters() {
+  const f = bandFilter();
+  for (const id of HEX_LAYERS) if (map.getLayer(id)) map.setFilter(id, f);
+  const bands = (META.summary && META.summary.bands) || {};
+  const sel = BANDS.filter(b => ACTIVE.has(b))
+                   .reduce((a, b) => a + ((bands[b] || {}).population || 0), 0);
+  const tot = BANDS.reduce((a, b) => a + ((bands[b] || {}).population || 0), 0);
+  const all = ACTIVE.size === BANDS.length;
+  document.getElementById("fcount").textContent = (tot
+    ? `${sel.toLocaleString()} of ${tot.toLocaleString()} people selected `
+      + `(${(100 * sel / tot).toFixed(1)}%).`
+    : "")
+    + (all || !ACTIVE.size ? ""
+       : ` Rolled up, a hexagon shows when the selected bands are the majority`
+         + ` of it; past z${DETAIL_ZOOM} the filter is exact per cell.`);
+}
+
+function buildFilters() {
+  const bands = (META.summary && META.summary.bands) || {};
+  const box = document.getElementById("filters");
+  for (const b of BANDS) {
+    const info = bands[b];
+    if (!info) continue;
+    const el = document.createElement("label");
+    el.innerHTML = `<input type="checkbox" data-band="${b}" checked> ${info.label}`
+      + ` <span class="n">${Number(info.population).toLocaleString()} people</span>`;
+    box.appendChild(el);
+  }
+  box.addEventListener("change", e => {
+    const b = e.target.dataset.band;
+    if (!b) return;
+    e.target.checked ? ACTIVE.add(b) : ACTIVE.delete(b);
+    applyFilters();
+  });
+  const setAll = on => {
+    ACTIVE = new Set(on ? BANDS : []);
+    box.querySelectorAll("input[data-band]").forEach(i => i.checked = on);
+    applyFilters();
+  };
+  document.getElementById("fall").onclick = e => { e.preventDefault(); setAll(true); };
+  document.getElementById("fnone").onclick = e => { e.preventDefault(); setAll(false); };
+  applyFilters();
+}
+
 // ---- Ask panel -------------------------------------------------------------
 // Bring-your-own-key, called straight from the browser. There is deliberately
 // no proxy: this page is a static file on GitHub Pages, and standing up a
@@ -460,6 +553,7 @@ function askContext() {
         : "counts are sums, ground properties are area means, RSRP is a MEDIAN",
     },
     selected_cell: LAST_CELL,
+    service_bands_visible: BANDS.filter(b => ACTIVE.has(b)),
   };
 }
 

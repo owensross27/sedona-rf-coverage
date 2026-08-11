@@ -25,6 +25,7 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -37,6 +38,40 @@ OUT_DIR = REPO_ROOT / "web" / "data"
 # The analysis grid's cell area. Used to turn summed population back into a
 # density so one colour ramp is valid at every roll-up level.
 AREA_R8_KM2 = 0.737
+
+# Service bands, exhaustive and mutually exclusive, in worsening-to-best order.
+# These are the filter the map is actually for: "how many PEOPLE are in each",
+# not "how many cells".
+#
+# `n_servers` counts towers whose predicted RSRP clears the threshold, so
+# covered == n_servers >= 1. A NaN `best_rsrp_dbm` means no plausible link to
+# any tower at all, which is a different and worse thing than a link that
+# arrives too weak -- one needs a new site, the other might only need more
+# height or power on a site that already exists.
+#
+# `single` is the sharpest band and the least obvious: those cells are covered
+# today and lose service entirely if one tower goes down.
+BANDS = ("no_link", "gap", "single", "multi", "over")
+BAND_LABELS = {
+    "no_link": "No link to any tower",
+    "gap": "Below threshold (has a link)",
+    "single": "Covered by exactly ONE tower",
+    "multi": "Covered by 2-4 towers",
+    "over": "Covered by 5+ towers",
+}
+
+
+def band_of(df: pd.DataFrame) -> pd.Series:
+    """Vectorised band assignment. Order matters: first match wins."""
+    n = df["n_servers"]
+    return pd.Series(
+        np.select(
+            [df["best_rsrp_dbm"].isna() & (n < 1), n < 1, n == 1, n <= 4],
+            ["no_link", "gap", "single", "multi"],
+            default="over",
+        ),
+        index=df.index,
+    )
 
 
 def read_dir(path: str) -> pd.DataFrame:
@@ -68,6 +103,7 @@ def hex_layer() -> pd.DataFrame:
         towers.rename(columns={"asr_id": "best_asr_id",
                                "height_agl_m": "srv_height_m"}),
         on="best_asr_id", how="left")
+    df["band"] = band_of(df)
 
     # Accumulated while the rings are already in hand, so the client can open
     # on the data instead of on a hardcoded county. A statewide tileset behind
@@ -104,6 +140,12 @@ def hex_layer() -> pd.DataFrame:
                     # raw counts saturates to solid black two zooms out.
                     # People per km2 means the same thing at every level.
                     "pop_km2": round(r.pop / AREA_R8_KM2, 1),
+                    # A single dictionary-encoded string, rather than the five
+                    # cells_* counters the roll-ups carry: at r8 a cell is in
+                    # exactly one band, and 88,281 repeated short strings cost
+                    # almost nothing in a vector tile. The client builds one
+                    # filter expression that reads either shape.
+                    "band": r.band,
                     "demand": round(r.demand),
                     "n_srv": int(r.n_servers),
                     "srv_asr": r.best_asr_id,
@@ -170,9 +212,20 @@ def lod_layers(df: pd.DataFrame) -> dict[str, int]:
         # NOT named with a leading underscore: itertuples silently renames any
         # such column to a positional `_1`, and the rename is invisible until
         # the attribute access fails at row zero.
+        # One column per band, holding this cell's population if it is in that
+        # band and 0 otherwise, so a plain groupby-sum yields the population
+        # breakdown. Same trick for the cell counts. It is more columns than a
+        # pivot would need, but it keeps the whole roll-up in ONE aggregation
+        # that the conservation asserts below can check end to end.
+        extra = {}
+        for b in BANDS:
+            inb = df["band"] == b
+            extra[f"pop_{b}"] = df["pop"].where(inb, 0.0)
+            extra[f"cells_{b}"] = inb.astype(int)
         g = df.assign(
             parent=[h3.cell_to_parent(c, res) for c in df["h3_str"]],
             covpop=df["pop"].where(df["is_covered"], 0.0),
+            **extra,
         )
         agg = g.groupby("parent", as_index=False).agg(
             pop=("pop", "sum"),
@@ -194,6 +247,8 @@ def lod_layers(df: pd.DataFrame) -> dict[str, int]:
             # what carry the no-link cells, and the two are meant to be read
             # together.
             rsrp=("best_rsrp_dbm", "median"),
+            **{f"pop_{b}": (f"pop_{b}", "sum") for b in BANDS},
+            **{f"cells_{b}": (f"cells_{b}", "sum") for b in BANDS},
         )
         # The invariant that makes this honest: nothing is lost on the way up.
         # A roll-up that drops cells produces a hole indistinguishable from an
@@ -206,6 +261,15 @@ def lod_layers(df: pd.DataFrame) -> dict[str, int]:
         assert abs(agg["cov_pop"].sum()
                    - df["pop"].where(df["is_covered"], 0.0).sum()) < 1.0, \
             f"{layer}: covered population not conserved"
+        # The bands are exhaustive and mutually exclusive, so they must add
+        # back up to the whole. This is the check that would catch a band
+        # predicate that silently stops matching -- e.g. n_servers changing
+        # dtype and `n == 1` never being true.
+        assert int(sum(agg[f"cells_{b}"].sum() for b in BANDS)) == len(df), \
+            f"{layer}: band cell counts do not sum to {len(df)}"
+        assert abs(sum(agg[f"pop_{b}"].sum() for b in BANDS)
+                   - df["pop"].sum()) < 1.0, \
+            f"{layer}: band populations do not sum to the total"
 
         with open(OUT_DIR / f"{layer}.geojsonl", "w") as fh:
             for r in agg.itertuples(index=False):
@@ -241,6 +305,16 @@ def lod_layers(df: pd.DataFrame) -> dict[str, int]:
                         "relief": round(r.relief) if pd.notna(r.relief) else None,
                         "elev": round(r.elev) if pd.notna(r.elev) else None,
                         "n_srv": round(r.n_srv, 1) if pd.notna(r.n_srv) else None,
+                        # Per-band counts and populations. A rolled-up cell is
+                        # not "in" one band -- it CONTAINS cells from several
+                        # -- so the filter asks whether it contains any, and
+                        # the panel shows the split. Zeros are dropped by
+                        # feature(), so an all-covered parent carries none of
+                        # the gap keys at all.
+                        **{f"c_{b}": int(getattr(r, f"cells_{b}")) or None
+                           for b in BANDS},
+                        **{f"p_{b}": round(getattr(r, f"pop_{b}")) or None
+                           for b in BANDS},
                     }) + "\n")
         counts[layer] = len(agg)
     return counts
@@ -261,6 +335,12 @@ def summarise(df: pd.DataFrame) -> dict:
         # served by exactly one tower is covered until that tower fails.
         "covered_cells_with_one_server": int(((df["n_servers"] == 1) & cov).sum()),
         "median_served_rsrp_dbm": round(float(df.loc[cov, "best_rsrp_dbm"].median()), 1),
+        # Drives the filter checkbox labels, so the counts on screen are
+        # computed from the same frame the tiles are, never typed in.
+        "bands": {b: {"label": BAND_LABELS[b],
+                      "cells": int((df["band"] == b).sum()),
+                      "population": int(round(df.loc[df["band"] == b, "pop"].sum()))}
+                  for b in BANDS},
     }
 
 
