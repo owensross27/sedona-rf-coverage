@@ -11,8 +11,15 @@ IMAGE_TAG      ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 ECR_IMAGE       = $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(ECR_REPO):$(IMAGE_TAG)
 
 .PHONY: setup test bench smoke demo pipeline dq ookla surface map tiles web-serve image push preflight \
-        spot-check cluster-up cluster-down nodes-up nodes-down spike job \
-        status check-nat watch watch-loop cost destroy-all clean
+        spot-check cluster-up cluster-down nodes-up nodes-down spike job events-prefix \
+        history history-stop \
+        status check-nat watch watch-loop destroy-all clean
+# `cost` was listed here with no recipe anywhere in the file. A .PHONY name
+# with no rule is worse than a missing target: `make cost` printed "Nothing to
+# be done" and exited 0, so it read as success. Removed rather than
+# implemented, because the honest version needs cost-allocation tags -- this
+# region has more than one tenant, and tags take ~24h to activate and are not
+# retroactive. `make status` reports the account total and now says so.
 
 ## --- local, no AWS account required ----------------------------------------
 
@@ -101,12 +108,15 @@ web-serve:
 image:
 	docker build -t $(ECR_REPO):$(IMAGE_TAG) -f docker/Dockerfile .
 
+# Silenced: every line here interpolates the account id. See `job` for why that
+# matters even when nothing is being recorded -- `docker push` prints the
+# registry host itself, which is unavoidable, but make need not print it twice.
 push: preflight
-	aws ecr get-login-password --region $(AWS_REGION) \
+	@aws ecr get-login-password --region $(AWS_REGION) \
 	  | docker login --username AWS --password-stdin \
 	    $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
-	docker tag $(ECR_REPO):$(IMAGE_TAG) $(ECR_IMAGE)
-	docker push $(ECR_IMAGE)
+	@docker tag $(ECR_REPO):$(IMAGE_TAG) $(ECR_IMAGE)
+	@docker push $(ECR_IMAGE)
 
 # The tax for going single-arch: assert every third-party image the cluster
 # pulls actually publishes arm64, before a pod fails with `exec format error`.
@@ -132,7 +142,8 @@ spot-check:
 	  --output table
 
 cluster-up:
-	RF_BUCKET=$(RF_BUCKET) envsubst < infra/eks/cluster.yaml | eksctl create cluster -f -
+	@# Silenced: the echoed recipe line would print the bucket name. See `job`.
+	@RF_BUCKET=$(RF_BUCKET) envsubst < infra/eks/cluster.yaml | eksctl create cluster -f -
 	@# Both nodegroups are created at desiredCapacity 0, so the cluster comes up
 	@# with ZERO nodes -- coredns sits Pending, and so would anything else. The
 	@# helm install below uses --wait, which would then block on a pod that has
@@ -185,12 +196,78 @@ spike:
 STAGE ?= 05
 # Driver-heavy stages (01/02/03) do not need three spot nodes idling behind them.
 EXECUTORS ?= 3
-job:
-	STAGE_NAME=$(STAGE) SCOPE=$(SCOPE) RF_BUCKET=$(RF_BUCKET) ECR_IMAGE=$(ECR_IMAGE) \
+# Spark refuses to start if spark.eventLog.dir does not exist, and on s3a a
+# prefix only exists once something is under it. A zero-byte marker is what s3a
+# reads as a directory. Idempotent, ~50ms, and a prerequisite of `job` rather
+# than a step to remember: forgetting it costs a whole cluster run.
+events-prefix:
+	@aws s3api put-object --bucket $(RF_BUCKET) --key spark-events/ \
+	  --region $(AWS_REGION) >/dev/null && echo "== s3 event-log prefix ready"
+
+job: events-prefix
+	@# A SparkApplication is not a Job: re-applying an existing one is a NO-OP,
+	@# not a re-run. Without this delete a resubmit prints `unchanged`, nothing
+	@# starts, and the old status sits there looking like the new run's.
+	@kubectl delete sparkapplication rf-coverage-$(STAGE) --ignore-not-found
+	@# SILENCED ON PURPOSE. make echoes a recipe line before running it, and this
+	@# one interpolates $$(RF_BUCKET) and $$(ECR_IMAGE) -- the bucket name and the
+	@# AWS account id, the two strings this public repo must never carry. Without
+	@# the @ they are printed to the terminal, and into any recording of it. The
+	@# same reason cluster-up and history are silenced.
+	@echo "== submitting rf-coverage-$(STAGE)  SCOPE=$(SCOPE)  EXECUTORS=$(EXECUTORS)"
+	@STAGE_NAME=$(STAGE) SCOPE=$(SCOPE) RF_BUCKET=$(RF_BUCKET) ECR_IMAGE=$(ECR_IMAGE) \
 	AWS_REGION=$(AWS_REGION) EXECUTORS=$(EXECUTORS) \
 	STAGE_FILE=$$(basename $$(ls src/$(STAGE)_*.py)) \
 	  envsubst < k8s/sparkapplication.yaml | kubectl apply -f -
-	kubectl get sparkapplication -w
+	@# `kubectl get sparkapplication -w` never returns, so the target could not
+	@# be chained, scripted or recorded -- it had to be Ctrl-C'd, and a Ctrl-C is
+	@# indistinguishable from a failure to anything downstream. Poll to a
+	@# terminal state instead, and exit non-zero when the job failed.
+	@start=$$(date +%s); \
+	 while :; do \
+	   s=$$(kubectl get sparkapplication rf-coverage-$(STAGE) \
+	        -o jsonpath='{.status.applicationState.state}' 2>/dev/null); \
+	   printf "\r  rf-coverage-%s  %-20s %4ds" "$(STAGE)" "$${s:-SUBMITTING}" $$(( $$(date +%s) - start )); \
+	   case "$$s" in \
+	     COMPLETED) echo; echo "== COMPLETED in $$(( $$(date +%s) - start ))s"; exit 0;; \
+	     FAILED|SUBMISSION_FAILED) echo; echo "== $$s -- kubectl logs rf-coverage-$(STAGE)-driver"; exit 1;; \
+	   esac; \
+	   sleep 5; \
+	 done
+
+# The Spark UI is a driver-pod service: it dies with the pod, so a finished job
+# leaves nothing to look at and "screenshot the UI" turns into a task that
+# competes with teardown for billable minutes. `spark.eventLog.dir` in
+# k8s/sparkapplication.yaml persists the log to S3 instead, and this renders it
+# back into the real UI -- jobs, stages, DAG, SQL, executors -- for free, and as
+# many times as wanted, long after the cluster is gone.
+#
+# Logs are SYNCED DOWN rather than read over s3a, for two reasons:
+#   1. The history server's header prints the log directory verbatim, and a
+#      screenshot of `s3a://<the actual bucket>` is precisely the string a public
+#      repo must never carry. file:// keeps the bucket name out of the image.
+#   2. hadoop-aws 3.3.4's default provider chain is Temporary -> Simple ->
+#      Environment -> IAMInstance, with NO ProfileCredentialsProvider. So s3a
+#      cannot see ~/.aws/credentials: a laptop with a working `aws` CLI still
+#      fails with "Unable to load AWS credentials from environment variables".
+#      The AWS CLI has no such gap, and reading a local directory needs no
+#      credentials at all.
+# data/ is gitignored, so the logs themselves never enter the repo either.
+HISTORY_DIR ?= data/spark-events
+history:
+	@mkdir -p $(HISTORY_DIR) $(CURDIR)/data/spark-history-logs
+	@aws s3 sync s3://$(RF_BUCKET)/spark-events $(HISTORY_DIR) --region $(AWS_REGION) --only-show-errors
+	@source scripts/java_env.sh && \
+	 SPARK_HOME=$(CURDIR)/.venv/lib/python3.11/site-packages/pyspark \
+	 SPARK_LOG_DIR=$(CURDIR)/data/spark-history-logs \
+	 SPARK_HISTORY_OPTS="-Dspark.history.fs.logDirectory=file://$(CURDIR)/$(HISTORY_DIR)" \
+	   $(CURDIR)/.venv/lib/python3.11/site-packages/pyspark/sbin/start-history-server.sh
+	@echo "== Spark UI on http://localhost:18080 -- 'make history-stop' when done"
+
+history-stop:
+	@SPARK_HOME=$(CURDIR)/.venv/lib/python3.11/site-packages/pyspark \
+	 SPARK_LOG_DIR=$(CURDIR)/data/spark-history-logs \
+	   $(CURDIR)/.venv/lib/python3.11/site-packages/pyspark/sbin/stop-history-server.sh
 
 # REMOVED: `serve-up` (kubectl apply -k k8s/serving/) and `dns`
 # (scripts/node_dns.sh). Both pointed at files that were never written, so both
@@ -212,7 +289,11 @@ status:
 	@echo "== nodes";    kubectl get nodes 2>/dev/null || echo "  (no cluster)"
 	@echo "== spark";    kubectl get sparkapplication 2>/dev/null || true
 	@$(MAKE) check-nat
-	@echo "== month-to-date spend"; \
+	@# ACCOUNT-WIDE, and this account has other tenants -- it is not this
+	@# project's spend and must never be quoted as such. Labelled rather than
+	@# removed: the account total is what tells you whether a budget alert
+	@# fired because of you or because of something else in the region.
+	@echo "== month-to-date spend (ACCOUNT-WIDE, all projects)"; \
 	  aws ce get-cost-and-usage --time-period Start=$$(date -u +%Y-%m-01),End=$$(date -u +%Y-%m-%d) \
 	    --granularity MONTHLY --metrics UnblendedCost \
 	    --query 'ResultsByTime[0].Total.UnblendedCost.Amount' --output text 2>/dev/null || true

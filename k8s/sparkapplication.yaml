@@ -62,6 +62,26 @@ spec:
     spark.kubernetes.driver.volumes.emptyDir.spark-local-dir-1.mount.path: /tmp/spark-local
     spark.kubernetes.executor.volumes.emptyDir.spark-local-dir-1.mount.path: /tmp/spark-local
     spark.kubernetes.executor.volumes.emptyDir.spark-local-dir-1.options.sizeLimit: 20Gi
+    # The Spark UI lives in the driver pod and dies with it. There is no history
+    # server on this cluster, so a finished job leaves nothing to look at, and
+    # "screenshot the UI" becomes a task that competes with teardown for the
+    # same billable minutes. Persisting the event log to S3 decouples the two:
+    # the run can be torn down immediately and the UI rendered afterwards, for
+    # free and as many times as wanted, with
+    #   pyspark/sbin/start-history-server.sh -- see docs/eks-runbook.md.
+    #
+    # THE PREFIX MUST ALREADY EXIST. EventLogFileWriter.start() calls
+    # getFileStatus on the log dir at SparkContext init, and on s3a a missing
+    # prefix is a FileNotFoundException -- the job dies before stage one, with a
+    # stack trace about event logging that reads nothing like a bucket problem.
+    # `make job` creates it first, which is why it is a prerequisite there.
+    #
+    # s3a has no real hflush: the event log is buffered locally and PUT on
+    # close, i.e. at SparkContext.stop(). A driver killed with SIGKILL leaves
+    # nothing behind, so a crashed pod still has no UI. Clean exits are fine --
+    # the shutdown hook stops the context.
+    spark.eventLog.enabled: "true"
+    spark.eventLog.dir: s3a://${RF_BUCKET}/spark-events
   driver:
     cores: 1
     # PySpark's memory overhead factor is 0.4, NOT the 0.1 that applies to
