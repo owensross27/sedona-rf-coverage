@@ -14,9 +14,9 @@ data is the next milestone and its planned form is at the bottom.
 **DEM vs the towers' own reported elevations.** The FCC ASR registry reports
 ground elevation at each structure independently of any DEM. Sampling the
 warped 90 m surface at all 605 in-scope structures: median residual
-**-4.3 m**, p90 |residual| 22.6 m. This validates three things at once — the
+**-4.3 m**, p90 |residual| 22.6 m. This validates three things at once, the
 D/M/S coordinate conversion, the hemisphere signs, and the raster's
-destination transform — because an error in any of them moves the median by
+destination transform, because an error in any of them moves the median by
 hundreds of metres, not single digits. The slightly negative sign is expected:
 bilinear downsampling of a surface model shaves the hilltops that towers
 stand on.
@@ -41,8 +41,7 @@ evidence of anything.
 **Optimizer vs proven optimum.** The greedy site plan reaches 99.8% of the
 exact MILP optimum (HiGHS, proven, not time-limited) on the demo instance.
 The two solvers are also pitted against each other in `tests/test_siting.py`
-on a small instance with a known answer where greedy is provably suboptimal —
-so the test fails if either solver silently degrades into the other.
+on a small instance with a known answer where greedy is provably suboptimal, so the test fails if either solver silently degrades into the other.
 
 ## The building-height clutter model vs its pre-registered baseline
 
@@ -58,7 +57,7 @@ parameters). The pre-registered baseline is retained behind
 | + building heights | 67.4% | 88.1% | -89.5 dBm |
 
 The direction and size are both sensible: the term can only add loss, and it
-adds it where buildings are, which is where people are — so population
+adds it where buildings are, which is where people are, so population
 coverage moves more than cell coverage (2,171 additional people in gap
 cells).
 
@@ -124,8 +123,8 @@ published. One wrong degree moves that by thousands.
 
 Reprojection to EPSG:5070 is **densified at 0.05° before the transform**. The
 parallels bow in Albers: joining the north and south corners with straight
-lines cuts **461 m** out of the middle of each edge — five times the 90 m
-analysis grid — and would silently leave a 105 km² strip of the zone
+lines cuts **461 m** out of the middle of each edge, five times the 90 m
+analysis grid, and would silently leave a 105 km² strip of the zone
 unflagged. Densified, the error is 0.27 m. The meridians are straight in Albers
 and need nothing.
 
@@ -145,7 +144,7 @@ thresholds pre-registered in `config.yml` (`ookla_min_tests: 5`,
 |---|---|
 | Sample density in scope | **224 of 3,345 hexes (6.7%)** contain any speedtest at all |
 | Gap hexes with speedtests | 0 of 1,092 (0.0%) |
-| Covered hexes with speedtests | 40 of 2,253 (1.8%) — the control |
+| Covered hexes with speedtests | 40 of 2,253 (1.8%), the control |
 
 **The control is what kills it.** Hexes the model calls *covered* carry
 speedtests at only 1.8%, so the sample cannot discriminate covered from
@@ -167,7 +166,7 @@ Two ways the metric lies, both live at once even when the sample is adequate:
   moment of service anywhere in a tile counts, against a steady-state
   prediction with an 8 dB margin.
 - **Reads too low, and this dominates.** Gap cells here average 0.97 tree cover
-  and 156 m of relief — mostly nobody is there to test. And the selection
+  and 156 m of relief, mostly nobody is there to test. And the selection
   effect runs the wrong way by construction: **someone with no signal cannot
   complete a speedtest**, so the population whose missing coverage we most want
   to confirm is exactly the one that cannot appear in the numerator.
@@ -184,9 +183,9 @@ Two ground truths, used asymmetrically because they prove different things:
   claims, so they support IoU and a confusion matrix against the modelled
   surface, at the BDC's own -105 dBm reference threshold.
 - **Ookla open data**: ingested and run (`make ookla`, stage `10_ookla.py`),
-  and the answer at demo scope is **that it cannot be used yet** — see below.
+  and the answer at demo scope is **that it cannot be used yet**: see below.
 - **ASR-BDC reconciliation**, published as a derived dataset: which
   registered structures sit inside carrier coverage consistent with hosting
-  the equipment — turning the model's weakest input into its most useful
+  the equipment, turning the model's weakest input into its most useful
   output. The retained `structure_type` column (tower / mast / pole /
   building) is the discriminator to test first.

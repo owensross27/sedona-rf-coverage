@@ -1,7 +1,7 @@
 # EKS runbook
 
 Operating notes for the cloud tier. The local tier (`make demo`) needs none of
-this — it runs the whole pipeline on one county with no AWS account at all.
+this: it runs the whole pipeline on one county with no AWS account at all.
 
 Everything below was written against a cluster that actually ran the statewide
 job, not against the documentation. Where a symptom is quoted, it is a symptom
@@ -72,7 +72,7 @@ Two constraints are load-bearing:
 
 - **The log prefix must exist before the job starts.** `EventLogFileWriter`
   calls `getFileStatus` on it at `SparkContext` init, and on s3a a missing
-  prefix is a `FileNotFoundException` — the job dies before stage one, with a
+  prefix is a `FileNotFoundException`. The job dies before stage one, with a
   stack trace about event logging that reads nothing like a bucket problem.
   `make job` depends on `events-prefix`, which creates the zero-byte marker
   s3a reads as a directory.
@@ -82,7 +82,7 @@ Two constraints are load-bearing:
   unsupported`, which is expected. A driver killed with SIGKILL leaves nothing,
   so a crashed pod still has no UI.
 
-To capture the UI as images rather than look at it, use headless Chrome — the
+To capture the UI as images rather than look at it, use headless Chrome, the
 Spark UI draws its DAG with JavaScript, so it needs a virtual time budget or
 the screenshot lands on an empty page:
 
@@ -96,8 +96,8 @@ the screenshot lands on an empty page:
 
 `make history` syncs the logs down rather than pointing the history server at
 `s3a://` directly. The server's header prints the log directory verbatim, and a
-screenshot of the real bucket name is exactly what a public repo must not carry
-— and hadoop-aws 3.3.4's provider chain (Temporary → Simple → Environment →
+screenshot of the real bucket name is exactly what a public repo must not
+carry. And hadoop-aws 3.3.4's provider chain (Temporary → Simple → Environment →
 IAMInstance) has **no `ProfileCredentialsProvider`**, so s3a cannot see
 `~/.aws/credentials` at all: a laptop with a working `aws` CLI still fails with
 `Unable to load AWS credentials from environment variables`. Reading a local
@@ -109,14 +109,14 @@ Every row here cost real time or real money once.
 
 | Symptom | Cause |
 |---|---|
-| `eksctl create` aborts with `unknown field "spotAllocationStrategy"` | It is a field on **unmanaged** `nodeGroups`, not `managedNodeGroups`. `eksctl create cluster --dry-run` validates the whole file for **free** — run it before every create |
+| `eksctl create` aborts with `unknown field "spotAllocationStrategy"` | It is a field on **unmanaged** `nodeGroups`, not `managedNodeGroups`. `eksctl create cluster --dry-run` validates the whole file for **free**: run it before every create |
 | `helm install --wait` hangs forever right after create | Both nodegroups are at 0, so even `coredns` is Pending. Scale `serve` first (`cluster-up` does) |
 | Executors Pending forever, `0/4 nodes are available: 3 Insufficient memory`, **while the job reports RUNNING** | Executor memory sized against the biggest instance in the pool. Spot returns the *cheapest*: 32 GiB machines are in the mix, and 24g × 1.4 overhead = 33.6 GiB > 29.8 GiB allocatable. Size against `kubectl get nodes -l workload=spark -o json` allocatable |
 | Job does all its work, then dies at commit with `AccessDeniedException: delete on s3a://.../_temporary/...` | The `serve` node role needs S3 **write** permissions despite the name: the driver commits, and on S3 a rename is copy + **delete** |
 | Driver pod 422s; logs show `Please check "kubectl auth can-i create pod"` | Not RBAC. A local-dir volume not named `spark-local-dir-*`, or `spark.local.dir` set alongside one, produces two volumeMounts for one path |
 | `IOException: Can't find the home directory at '/nonexistent'` in stage 02 | The Spark image user has no home; duckdb resolves one at startup. `HOME=/tmp` |
 | `w+b not supported for /vsis3/` writing a COG | GDAL cannot create a tiled TIFF directly on object storage. `CPL_VSIL_USE_TEMP_FILE_FOR_RANDOM_WRITE=YES` plus `CPL_TMPDIR=/tmp` |
-| A COG reads as "not a supported file format" | GDAL with no region talks to us-east-1; a us-west-2 bucket answers 301. Set `AWS_DEFAULT_REGION`. Affects only the raster stages — boto3 and hadoop-aws are unaffected |
+| A COG reads as "not a supported file format" | GDAL with no region talks to us-east-1; a us-west-2 bucket answers 301. Set `AWS_DEFAULT_REGION`. Affects only the raster stages, boto3 and hadoop-aws are unaffected |
 | `exec format error` | Something in the path is amd64. Everything here is arm64; `make preflight` checks the third-party images |
 | `.dkr.ecr.` with nothing before it | `AWS_ACCOUNT_ID` is not exported. The Makefile never hardcodes it |
 | Image tag exists but the code inside is old | **A tag names the SHA at build time, not the source inside it.** `make push` does not depend on `image`. Always `make image` immediately before `make push` (11.6 s, fully cached but `COPY src/`), and verify with `docker run --rm --entrypoint ls <tag> /opt/rfc/src/` |
@@ -140,8 +140,8 @@ looping it is free.
 Two things it taught, both worth keeping:
 
 - **Transient-by-design states must not be reported as standing faults.** It
-  cried wolf three times — cordoned nodes during scale-down, kube-system pods
-  during bootstrap, gaps between chained stages — before the thresholds and
+  cried wolf three times, cordoned nodes during scale-down, kube-system pods
+  during bootstrap, gaps between chained stages, before the thresholds and
   grace periods were right. An alarm that is usually wrong gets ignored, and
   then it is worse than nothing.
 - **A check that quietly stops applying is worse than one that fails.** The
@@ -150,7 +150,7 @@ Two things it taught, both worth keeping:
   input loudly.
 
 Related: `cmd | tail; echo $?` reports **tail's** exit code. Any exit-code
-claim measured through a pipe is worthless — redirect and capture instead.
+claim measured through a pipe is worthless, redirect and capture instead.
 
 ## Teardown, and how to actually verify it
 
@@ -185,11 +185,11 @@ exists for exactly that.
 enforcement primitive is `aws_budgets_budget_action`, and all three forms fail
 for this shape:
 
-- `scp_action_definition` — SCPs never apply to an organization's management
+- `scp_action_definition`, SCPs never apply to an organization's management
   account, and this is one.
-- `ssm_action_definition` — needs explicit `instance_ids`, which an EKS
+- `ssm_action_definition`, needs explicit `instance_ids`, which an EKS
   autoscaling group cannot supply in advance.
-- `iam_action_definition` — works, but only blocks the creation of **new**
+- `iam_action_definition`, works, but only blocks the creation of **new**
   resources. It cannot stop a control plane that is already billing, which is
   precisely the failure mode here.
 
@@ -199,5 +199,5 @@ that deletes any `rf-cov`-tagged cluster older than its TTL. Budgets remain, as
 notification.
 
 Sizing note: a cluster forgotten for a fortnight is ~$34, which is *under* a $45
-cap — so the cap would stay silent through the entire scenario it was bought
+cap, so the cap would stay silent through the entire scenario it was bought
 for. The budget only makes sense because the reaper handles the sub-cap case.

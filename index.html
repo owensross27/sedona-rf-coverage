@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<!--
+  The Pages root existed only as a 404. The site is published from the repo
+  root with .nojekyll, so GitHub serves files raw: README.md is never turned
+  into an index, and the bare project URL -- the one that ends up in an
+  application or a CV -- returned "Page not found" while the map sat one
+  directory down at /web/.
+
+  A redirect rather than a copy of the map: the map is one static file plus a
+  22 MB tileset, and duplicating either would mean two things to keep in step.
+  Meta refresh rather than JavaScript, so it works with scripting disabled.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WV RF coverage</title>
+<meta http-equiv="refresh" content="0; url=web/">
+<link rel="canonical" href="https://owensross27.github.io/sedona-rf-coverage/web/">
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 4rem auto;
+         max-width: 34rem; padding: 0 1rem; line-height: 1.5; }
+</style>
+</head>
+<body>
+<h1>West Virginia RF coverage</h1>
+<p>Opening the <a href="web/">interactive map</a>.</p>
+<p>Source and write-up:
+<a href="https://github.com/owensross27/sedona-rf-coverage">github.com/owensross27/sedona-rf-coverage</a></p>
+</body>
+</html>

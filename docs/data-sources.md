@@ -22,8 +22,7 @@ repository.
 
 Chosen over USGS 3DEP 10 m (`s3://prd-tnm/StagedProducts/Elevation/13/`, also
 verified and also free) because the model's diffraction geometry is driven by
-ridgelines, and the first Fresnel radius at 700 MHz over 20 km is about 65 m —
-30 m posting is already finer than the physics resolves. 3DEP remains the
+ridgelines, and the first Fresnel radius at 700 MHz over 20 km is about 65 m, 30 m posting is already finer than the physics resolves. 3DEP remains the
 upgrade path for a sensitivity run.
 
 Note that GLO-30 is a **surface** model: its returns include forest canopy and
@@ -79,15 +78,13 @@ Two things to know before using it:
 **FCC Broadband Data Collection (mobile).** Per-carrier, per-technology
 coverage polygons plus H3 resolution-9 aggregations, from
 `broadbandmap.fcc.gov/data-download`. Shapefile / GeoPackage, not S3, and the
-download is interactive enough that it is the one manual step in the pipeline
-— which is why the build plan starts it on day one. Scoped to two carriers,
+download is interactive enough that it is the one manual step in the pipeline, which is why the build plan starts it on day one. Scoped to two carriers,
 4G LTE, West Virginia only.
 
-**Ookla Open Data.** `s3://ookla-open-data/parquet/performance/type=mobile/year=2026/quarter=2/2026-04-01_performance_mobile_tiles.parquet`
-— read live 2026-08-10: one file, 186,254,189 bytes, **3,382,642 rows**
+**Ookla Open Data.** `s3://ookla-open-data/parquet/performance/type=mobile/year=2026/quarter=2/2026-04-01_performance_mobile_tiles.parquet`, read live 2026-08-10: one file, 186,254,189 bytes, **3,382,642 rows**
 globally, columns `quadkey, tile, tile_x, tile_y, avg_d_kbps, avg_u_kbps,
 avg_lat_ms, avg_lat_down_ms, avg_lat_up_ms, tests, devices, quarter, type,
-year`. Rows are zoom-16 web-mercator tiles — **479 m across at 38.4 N**, not
+year`. Rows are zoom-16 web-mercator tiles, **479 m across at 38.4 N**, not
 the ~600 m quoted at the equator, so roughly three land in each H3 r8 hex.
 `tile_x`/`tile_y` are Ookla's own precomputed tile centroids, which is why
 `src/10_ookla.py` never parses the `tile` WKT. Published quarterly about 5–6
@@ -98,7 +95,7 @@ weeks after quarter close.
 > Ookla leg or license it separately.
 
 The two are used asymmetrically on purpose. Ookla proves *presence* of service
-and cannot prove absence — a tile with no speedtests may simply have nobody in
+and cannot prove absence, a tile with no speedtests may simply have nobody in
 it. So it is used for exactly one thing: the **false-negative rate on gap
 calls**. BDC gives full polygon coverage, so it supports IoU and a confusion
 matrix.
@@ -115,12 +112,12 @@ matrix.
 
 **TIGER/Line block group geometry**, `www2.census.gov/geo/tiger/TIGER2024/BG/tl_2024_54_bg.zip`.
 Shapefile only. **There is no public GeoParquet of TIGER block groups on S3 or
-Source Cooperative** — searched and not found. `03_census.py` converts, and
+Source Cooperative**, searched and not found. `03_census.py` converts, and
 publishing that conversion is a small genuine contribution.
 
 **Growth** is computed at **county** level only, from two ACS vintages. Block
 group boundaries were redrawn between the 2010 and 2020 censuses, so a
-GEOID-to-GEOID join across vintages is silently wrong — it produces plausible
+GEOID-to-GEOID join across vintages is silently wrong, it produces plausible
 numbers for the wrong geographies. Counties are stable.
 
 **Tourism demand**: Overture Maps `places` theme,
@@ -145,8 +142,7 @@ Categories weighted in `config.yml`. CDLA Permissive 2.0.
 Measured over West Virginia (2026-08-09): **4,550,373 buildings, `height`
 present on 74.2%**, median 3.85 m statewide (3.55 m over the demo box's
 426k-526k footprints, max 89 m). `num_floors` is present on 0.49% and
-`min_height` / `roof_height` are effectively absent (1 and 11 rows statewide)
-— only `height` is usable.
+`min_height` / `roof_height` are effectively absent (1 and 11 rows statewide), only `height` is usable.
 
 Used since 2026-08-10 as the third co-registered raster layer: heights burned
 onto the shared 90 m grid at the footprint's bbox centre with a per-pixel

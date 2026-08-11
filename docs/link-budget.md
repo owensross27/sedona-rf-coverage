@@ -41,7 +41,7 @@ Free-space loss at 700 MHz:
 | 40 km | 121.4 dB |
 
 So even at 40 km the free-space budget leaves ~8 dB for diffraction and
-clutter — which is why `max_link_km: 40` is a generous pair-generation cap
+clutter, which is why `max_link_km: 40` is a generous pair-generation cap
 rather than a binding constraint.
 
 ## The constraint that actually binds
@@ -60,8 +60,8 @@ earth itself, regardless of budget. The kernel models this through the
 effective-earth sagitta in the diffraction geometry, and
 `test_earth_curvature_blocks_beyond_the_radio_horizon` asserts the
 line-of-sight flag flips at the computed horizon. The 40 km cap deliberately
-sits beyond the typical horizon so that tall structures — WV registers masts
-over 300 m, with horizons past 70 km — are not clipped a priori.
+sits beyond the typical horizon so that tall structures, WV registers masts
+over 300 m, with horizons past 70 km, are not clipped a priori.
 
 ## Clutter
 

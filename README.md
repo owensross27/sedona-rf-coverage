@@ -6,27 +6,63 @@ Modelling cellular coverage across West Virginia from open data, finding the
 population it misses, and picking the tower sites that would close the most of
 that gap.
 
-Apache Sedona and Spark for the distributed geospatial work — vector joins and
-tiled raster analytics both — a vectorized terrain-diffraction kernel for the
+Apache Sedona and Spark for the distributed geospatial work (vector joins and
+tiled raster analytics both), a vectorized terrain-diffraction kernel for the
 per-link physics, Kubernetes on EKS for the production run, and a static map
 that stays up after the cluster is torn down.
 
-> **Status.** The full local pipeline is real: `make demo` runs one county end
-> to end from open S3 buckets to a ranked list of recommended tower sites,
-> with a data-quality gate that exits non-zero. The statewide EKS run and the
-> validation against FCC ground truth are in progress. Every number below was
-> produced by a command in this repository; see [Verification](#verification)
-> for exactly which gates pass.
+> **Status.** All nine stages have run statewide on EKS: 88,281 receiver cells
+> across all 55 counties, data-quality gate 8/8, cluster torn down the same
+> day. `make demo` still runs the same code on one county on a laptop with no
+> AWS account, which is the reproducibility gate. Validation against FCC
+> Broadband Data Collection ground truth is the remaining milestone. Every
+> number below was produced by a command in this repository; see
+> [Verification](#verification) for exactly which gates pass.
 
 ![Coverage and recommended sites](docs/img/coverage_map.png)
 
-**[Explore the interactive map](https://owensross27.github.io/sedona-rf-coverage/web/)** —
-pan around, switch between signal / coverage / population / tree cover / relief,
-and click any hexagon for why its signal is what it is: the serving tower and
-its height, distance, line of sight, tree cover, terrain relief, and building
-heights. One static PMTiles file served by GitHub Pages; no server anywhere.
+*Demo scope (Kanawha County). The interactive map below is statewide.*
 
-## Headline result (demo scope: Kanawha County)
+**[Explore the interactive map](https://owensross27.github.io/sedona-rf-coverage/web/)**
+
+All 88,281 cells, statewide. The hexagons coarsen as you zoom out (H3 r5
+through r8 on disjoint zoom bands) so the whole state draws without dropping a
+single cell, because a dropped cell on a choropleth is indistinguishable from
+an uncovered one. Switch between signal, coverage, population, tree cover and
+relief; filter by service band to see where the 257,018 people in gap cells
+actually are; and click any hexagon for why its signal is what it is: the
+serving tower and its height, distance, line of sight, tree cover, terrain
+relief, and building heights. One static PMTiles file served by GitHub Pages,
+no server anywhere.
+
+## Headline result
+
+**Statewide, all 55 counties, 88,281 H3 r8 receiver cells:**
+
+| Measure | Covered at -105 dBm RSRP |
+|---|---|
+| Receiver cells | **63.6%** |
+| **Population** | **85.5%** (257,018 of 1,766,546 people in gap cells) |
+| Median served RSRP | -91.5 dBm |
+
+Broken down by how the service actually arrives, which is the distinction the
+map is built around:
+
+| Service band | Cells | People |
+|---|---|---|
+| No link to any tower | 10,726 | 65,529 |
+| Below threshold, but a link exists | 21,393 | 191,489 |
+| **Covered by exactly one tower** | **12,347** | **147,054** |
+| Covered by 2-4 towers | 16,197 | 296,378 |
+| Covered by 5+ towers | 27,618 | 1,066,097 |
+
+The third row is the one worth arguing about. Those 147,054 people have
+service today and lose it entirely if a single structure goes down, and no
+coverage percentage anywhere shows that. The first two rows are separated
+because they need different money: one needs a new site, the other might only
+need more height or power on a site that already exists.
+
+**Demo scope (Kanawha County, 3,345 cells), the tier that runs on a laptop:**
 
 | Measure | Covered at -105 dBm RSRP |
 |---|---|
@@ -50,8 +86,7 @@ statistics over the input rasters (stage 08):
 | Tree-cover fraction | 0.97 | 0.91 |
 | Built-up fraction | 0.00 | 0.03 |
 
-The gaps are steep, forested, and essentially uninhabited by structures —
-which is also why the population-weighted number is so much higher than the
+The gaps are steep, forested, and essentially uninhabited by structures, which is also why the population-weighted number is so much higher than the
 cell-weighted one.
 
 ![Per-pixel propagation surfaces](docs/img/surface.png)
@@ -60,7 +95,7 @@ The hexagons are the analysis unit; the picture above is the same physics at
 every 90 m pixel (`make surface`, ~100M links in one Spark pass): today's
 best-server RSRP, the surface after the optimizer's 20 recommended sites, and
 the ground those sites newly cover. Per-pixel coverage lands at 67.1% against
-the hex grid's 67.4% — two receiver sets, one model, same answer. Both
+the hex grid's 67.4%: two receiver sets, one model, same answer. Both
 surfaces are also toggleable layers in the interactive map.
 
 ## Why West Virginia
@@ -72,10 +107,10 @@ a population raster:
 - **The National Radio Quiet Zone.** A 13,000 square mile federal zone around
   the Green Bank Observatory where new transmitters require coordination. It
   is a real legal constraint on where a tower can go, and the optimizer treats
-  it as one — candidates inside it are flagged, never silently dropped. The
+  it as one, candidates inside it are flagged, never silently dropped. The
   boundary is constructed from the four corners in 47 CFR 1.924 rather than
   fetched (NRAO publishes only a KMZ), and the constructed polygon encloses
-  13,108 sq mi against the ~13,000 published — the one independent check
+  13,108 sq mi against the ~13,000 published, the one independent check
   available on a hand-transcribed boundary. Demo scope is Kanawha County, 51 km
   west of it, so the demo run flags nothing; the constraint binds at
   `SCOPE=state`.
@@ -96,7 +131,7 @@ RSRP = EIRP - 10*log10(subcarriers) - FSPL - L_diffraction - L_clutter - shadow 
 Free-space loss, plus Deygout three-edge knife-edge diffraction over a
 128-sample terrain profile with an effective-earth correction for atmospheric
 refraction, plus a receiver clutter term. Covered means RSRP at or above
-**-105 dBm** — the FCC Broadband Data Collection's own 4G LTE reference value,
+**-105 dBm**: the FCC Broadband Data Collection's own 4G LTE reference value,
 so validation compares like with like instead of against a threshold of our
 choosing. The full budget derivation is in
 [`docs/link-budget.md`](docs/link-budget.md).
@@ -104,8 +139,7 @@ choosing. The full budget derivation is in
 The clutter term is the maximum of two descriptions of whatever stands next
 to the receiver, never their sum:
 
-- **Land-cover class** (ESA WorldCover): a pre-registered flat loss per class
-  — 12 dB tree cover, 15 dB built-up, and so on.
+- **Land-cover class** (ESA WorldCover): a pre-registered flat loss per class, 12 dB tree cover, 15 dB built-up, and so on.
 - **Building height** (Overture Maps): the receiver stands half a street width
   behind a rooftop of the pixel's tallest measured building, and the loss is
   the same ITU-R P.526 knife edge the terrain model uses. One physics, two
@@ -120,7 +154,7 @@ retained behind one switch and reproduces bit for bit
 are reported in [`docs/validation.md`](docs/validation.md). The check that
 makes it a refinement rather than a re-tune: the median WV building (3.55 m)
 evaluates to **14.8 dB** against the flat 15 dB the built-up class
-pre-registered — two independent routes to the same street.
+pre-registered, two independent routes to the same street.
 
 | | Cells covered | Population covered | Median served RSRP |
 |---|---|---|---|
@@ -162,7 +196,7 @@ account. The same code runs statewide on EKS by changing `SCOPE`.
 ### Deployment: what runs today
 
 Everything below is built, running, and verified. Nothing here touches a paid
-service — total spend to date is $0.00.
+service, total spend to date is $0.00.
 
 ```mermaid
 flowchart LR
@@ -194,11 +228,14 @@ flowchart LR
     pages --> browser
 ```
 
-### Deployment: the statewide plan (not yet built)
+### Deployment: the statewide run
 
-The same code at `SCOPE=state` on EKS. Design decisions are made and costed
-(~$21 modelled, worst case ~$35 — see [Cost](#cost)); no cloud resource
-exists yet, and this diagram is a plan, not a claim.
+The same code at `SCOPE=state` on EKS. This ran: all nine stages, 88,281
+receiver cells, data-quality gate 8/8, and the cluster destroyed the same day
+with an orphan sweep to prove it (0 clusters, 0 instances, 0 volumes, 0 NAT
+gateways, 0 stacks). Total AWS spend across the whole project to date is
+**$1.20**, against ~$21 modelled, because moving the development loop onto a
+laptop removed the hours rather than making them cheaper.
 
 ```mermaid
 flowchart LR
@@ -240,8 +277,7 @@ spatial index behind it turns that into a few million, in both the coverage
 pass (05) and the candidate evaluation of the site optimizer (09). GeoParquet
 in and out everywhere; the geometry-bearing tables never leave Sedona types.
 
-**Raster.** Stage 08 answers ~3k (demo) to ~85k (state) zonal questions —
-relief, forest fraction, building height per receiver cell — as tiled raster
+**Raster.** Stage 08 answers ~3k (demo) to ~85k (state) zonal questions (relief, forest fraction, building height per receiver cell) as tiled raster
 analytics: `RS_TileExplode` the COGs, spatial-join hexagons to tiles with
 `RS_Intersects`, `RS_ZonalStatsAll` per intersection, and aggregate the
 combinable statistics per hexagon. Land-cover masks are `RS_MapAlgebra` over
@@ -258,8 +294,7 @@ The per-link physics runs in numpy on broadcast arrays, not through
 samples and looks each one up through the JVM boundary: ~380 million calls at
 state scope. Instead the DEM, clutter and building rasters are broadcast once
 (10 MB measured at demo scope; ~80 MB projected statewide) and every sample is
-a fancy index into shared read-only RAM. Measured at **9.4M pairs/min/core** —
-94x the go/no-go gate ([`docs/benchmarks.md`](docs/benchmarks.md)).
+a fancy index into shared read-only RAM. Measured at **9.4M pairs/min/core**: 94x the go/no-go gate ([`docs/benchmarks.md`](docs/benchmarks.md)).
 
 Same engine, opposite choices, each with the measurement that justifies it:
 tiled raster SQL for thousands of zonal questions, broadcast arrays for
@@ -269,9 +304,9 @@ hundreds of millions of point samples.
 
 The maximum-coverage location problem, solved twice on purpose:
 
-- **Greedy submodular** — take the largest marginal gain, twenty times.
+- **Greedy submodular**: take the largest marginal gain, twenty times.
   Guaranteed within 1-1/e (63.2%) of optimal; milliseconds.
-- **Exact MILP** through HiGHS (`scipy.optimize.milp`) — proves the optimum,
+- **Exact MILP** through HiGHS (`scipy.optimize.milp`), proves the optimum,
   or proves how close greedy already was.
 
 Demo scope: greedy landed at **99.8% of the proven optimum** in 0.01 s. The
@@ -280,7 +315,7 @@ argument you can only make by running both solvers.
 
 Candidates are existing ASR structures within 15 km of a gap (colocation is
 what carriers actually do) plus the highest DEM pixel in each r7 cell
-containing a gap. Both are evaluated with the full propagation kernel — the
+containing a gap. Both are evaluated with the full propagation kernel, the
 optimizer and the coverage map run identical physics by construction, because
 stage 09 imports stage 05's kernel rather than restating it.
 
@@ -288,7 +323,7 @@ Two results worth more than the site list itself:
 
 - **The reachable ceiling.** Twenty sites reach 150 of 1,092 gap cells, which
   reads as a feeble optimizer until you know that *all 369 viable candidates
-  together* reach only 946 — the remaining gaps are unreachable at this link
+  together* reach only 946, the remaining gaps are unreachable at this link
   budget from any candidate. Against that ceiling, twenty towers capture
   **84%** of the recoverable demand.
 - **The plan is a tourism plan, and the pre-registered sensitivity proves
@@ -296,20 +331,20 @@ Two results worth more than the site list itself:
   {3, 20, 19} of 20 sites with the published plan: robust to the magnitude of
   the tourism term, entirely dependent on counting tourism at all. Seventeen
   of the twenty recommended sites exist because a trailhead counts. That is a
-  defensible, pre-registered modelling position — but it is the kind of fact
+  defensible, pre-registered modelling position, but it is the kind of fact
   a reader should be told, not discover.
 
 ## Two bugs worth reading about
 
 Both were caught by the test suite before any map was drawn. They are written
-up because the failure mode they share — a model that produces a beautiful,
-confident, wrong picture — is the one that matters in this domain.
+up because the failure mode they share, a model that produces a beautiful,
+confident, wrong picture, is the one that matters in this domain.
 
 **Phantom diffraction over flat ground.** The first kernel searched for the
 strongest Fresnel obstruction across every profile sample. A receiver 1.5 m
 above flat ground has about 3 m of clearance against an 8 m first-Fresnel
 radius at 5 km, so the ground immediately beside it always registered as an
-obstruction — and Deygout charged for it three times, principal edge plus both
+obstruction, and Deygout charged for it three times: principal edge plus both
 sub-path edges. Measured result: **11.4 dB of diffraction loss across
 dead-flat terrain**, on every link in the state, which would have inflated the
 headline uncovered-population figure. Diffraction is now restricted to terrain
@@ -363,7 +398,7 @@ arm64 spot executors. 402 s from `kubectl apply` to `COMPLETED`, ending with
 the deterministic waste check that gates teardown.
 
 The physical plan is where Sedona stops being a library and starts being a
-query engine. This is the zonal-statistics query from that run — 2.1 minutes,
+query engine. This is the zonal-statistics query from that run, 2.1 minutes,
 `SpatialIndex` and `BroadcastIndexJoin` chosen by the optimizer, not by the
 code:
 
@@ -373,7 +408,7 @@ code:
 raster tiles; `SpatialIndex` builds over 88,281 H3 receiver cells, and
 `BroadcastIndexJoin` pairs tiles to cells in 92,246 rows. Five tiled rasters
 against 88,281 hexes finished in 285 s, and three of those hexes were
-recomputed with rasterio afterwards as a self-check — max delta within 2%, so
+recomputed with rasterio afterwards as a self-check, max delta within 2%, so
 the distributed plan agrees with the single-node answer.
 
 ![Spark executors](docs/img/spark-ui-executors.png)
@@ -397,7 +432,7 @@ The parts that cost real time:
 - **`spark-defaults.conf` baked into an image does nothing on Kubernetes.**
   Spark generates a ConfigMap from the submit-time config and mounts it over
   `SPARK_CONF_DIR`, shadowing the image's copy. s3a settings have to be set in
-  the `SparkConf` builder — see [`src/session.py`](src/session.py).
+  the `SparkConf` builder, see [`src/session.py`](src/session.py).
 - **Anonymous open-data reads and authenticated writes in one session.** A
   global anonymous provider breaks the writes; the default chain breaks the
   public reads. Per-bucket overrides are the only correct answer, and a typo
@@ -412,7 +447,7 @@ The parts that cost real time:
 
 ## Cost
 
-Everything above — every number, map and figure in this README — was produced
+Everything above (every number, map and figure in this README) was produced
 for **under one cent**. The inputs are anonymous open S3 buckets and the demo
 pipeline runs on a laptop. The only standing charge is the container image in
 ECR: **$0.13/month**, for 1.30 GB of compressed layers.
@@ -427,7 +462,7 @@ Measured from the live us-west-2 API on 2026-08-11:
 
 | | Rate | Bills when |
 |---|---|---|
-| EKS control plane | **$0.10/hr** | the cluster *exists* — nodes or not |
+| EKS control plane | **$0.10/hr** | the cluster *exists*, nodes or not |
 | 3x r7g.2xlarge spot (us-west-2d) | $0.362/hr | only while scaled up |
 | 1x t4g.large on-demand (driver) | $0.067/hr | only while scaled up |
 | EBS, 4x30 GB gp3 | $0.013/hr | only while nodes exist |
@@ -437,7 +472,7 @@ So `make nodes-up` costs **$0.44/hr**, and a cluster sitting idle still costs
 accrues while nothing is happening and nothing looks wrong.
 
 The statewide run needs roughly 16 control-plane hours and 9 node hours, or
-about **$6.50** — under the $21 originally modelled, because moving the
+about **$6.50**: under the $21 originally modelled, because moving the
 development loop off the cluster removed most of the hours rather than making
 them cheaper.
 
@@ -460,7 +495,7 @@ Budget Action, and all three of its forms fail on this account:
 |---|---|
 | `scp_action_definition` | Service control policies never apply to an organization's **management account**, which this is. |
 | `ssm_action_definition` | Needs explicit instance ids. EKS nodes get unpredictable ones from an autoscaling group. |
-| `iam_action_definition` | Blocks the creation of **new** resources. It cannot stop a control plane that is already billing — the exact failure mode above. |
+| `iam_action_definition` | Blocks the creation of **new** resources. It cannot stop a control plane that is already billing, the exact failure mode above. |
 
 A cap also has to be sized against the realistic disaster, not the worst
 imaginable one. A cluster forgotten for a fortnight is about $34, which sits
@@ -481,7 +516,7 @@ two), and `make spike` traps teardown to the session so the ordinary path
 requires no memory.
 
 `make destroy-all` tears down the cluster, the Terraform resources, and scans
-for orphaned EBS volumes. `make status` reports month-to-date spend — note
+for orphaned EBS volumes. `make status` reports month-to-date spend, note
 that Cost Explorer bills per request, so that one command costs $0.01 and is
 deliberately never looped.
 
@@ -495,7 +530,7 @@ deliberately never looped.
 | Iceberg | No schema-evolution or incremental-refresh requirement; outputs are COGs and GeoParquet that a browser and DuckDB read directly. |
 | IRSA | hadoop-aws 3.3.4 pairs with AWS SDK v1, making web identity an hour of yak-shaving for ~zero security delta on an ephemeral single-tenant cluster. Documented as the production upgrade. |
 | cert-manager + Let's Encrypt | LE allows 5 duplicate certificates per week; this cluster is recreated 6-10 times in a fortnight. ACM is free and does not rate-limit. |
-| Overture `num_floors` | Present on 0.5% of WV buildings — unusable. `height` is present on 74% and is used (see the clutter model above). An earlier note here dismissed the whole theme as sparse; measuring it corrected that. |
+| Overture `num_floors` | Present on 0.5% of WV buildings, unusable. `height` is present on 74% and is used (see the clutter model above). An earlier note here dismissed the whole theme as sparse; measuring it corrected that. |
 | Hata / COST-231 path models | Invalid past ~20 km; West Virginia links routinely exceed that. (COST-231's rooftop-to-street *bound* does inform the building-loss cap.) |
 | Wherobots Cloud | No free tier as of 2026-08-09 (trial only), so the deployment story had to be self-hosted. |
 
@@ -506,8 +541,7 @@ Stated up front rather than discovered by a reader. The quantified ones are in
 
 - **FCC ASR structures are not cell sites.** The registry covers structures
   over 200 ft, includes broadcast masts, and misses rooftop and small-cell
-  installations entirely. Reconciling ASR against FCC BDC coverage polygons —
-  to infer which structures plausibly carry cellular — is planned as a
+  installations entirely. Reconciling ASR against FCC BDC coverage polygons, to infer which structures plausibly carry cellular, is planned as a
   published output, because the weakest input makes the most interesting
   finding.
 - Isotropic transmitters: no antenna patterns, downtilt, sectorization, or
@@ -519,8 +553,7 @@ Stated up front rather than discovered by a reader. The quantified ones are in
   terrain profile and partly in the clutter term. The overlap is bounded and
   documented, not zero.
 - No interference, no capacity modelling, no building penetration.
-- Deygout over-predicts loss when several edges are of similar prominence —
-  used anyway because the single-knife-edge alternative *under*-predicts in
+- Deygout over-predicts loss when several edges are of similar prominence, used anyway because the single-knife-edge alternative *under*-predicts in
   multi-ridge terrain, and the direction of error that flatters the result is
   the one to avoid.
 
@@ -528,15 +561,15 @@ Stated up front rather than discovered by a reader. The quantified ones are in
 
 | Gate | Status |
 |---|---|
-| Kernel correctness (`make test`) | **40/40 passing** — physics anchors (J(0)=6.02 dB, radio horizon, flat ground costs nothing), coverage weighting, optimizer-vs-MILP on a known instance |
+| Kernel correctness (`make test`) | **40/40 passing**: physics anchors (J(0)=6.02 dB, radio horizon, flat ground costs nothing), coverage weighting, optimizer-vs-MILP on a known instance |
 | Kernel throughput (`make bench`) | **passing, 94x margin** |
-| `make demo`, one county end to end | **passing, exit 0** — nine stages, ~15 min on a laptop |
-| DQ gate fails non-zero on bad input | **verified both ways** — tampered thresholds exit 1 naming the failed checks |
+| `make demo`, one county end to end | **passing, exit 0**: nine stages, ~15 min on a laptop |
+| DQ gate fails non-zero on bad input | **verified both ways**: tampered thresholds exit 1 naming the failed checks |
 | Building-height model vs pre-registered baseline | **reported side by side**, baseline reproducible bit for bit |
 | Sedona zonal stats vs independent rasterio recompute | **agrees** (asserted in stage 08) |
-| NRQZ boundary | **verified** — Green Bank inside, Charleston outside, and 13,108 sq mi against the ~13,000 published |
-| Model vs Ookla speedtests | **run, and the answer is "not usable at demo scope"** — only 1.8% of *covered* hexes carry speedtests, so the sample cannot discriminate. The stage refuses to quote the number. See `docs/validation.md` |
-| Model vs FCC BDC | not yet — the next milestone |
+| NRQZ boundary | **verified**: Green Bank inside, Charleston outside, and 13,108 sq mi against the ~13,000 published |
+| Model vs Ookla speedtests | **run, and the answer is "not usable at demo scope"**: only 1.8% of *covered* hexes carry speedtests, so the sample cannot discriminate. The stage refuses to quote the number. See `docs/validation.md` |
+| Model vs FCC BDC | not yet, the next milestone |
 | Statewide run on EKS | not yet |
 
 ## Data
