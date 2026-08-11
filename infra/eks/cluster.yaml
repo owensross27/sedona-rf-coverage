@@ -14,9 +14,20 @@ metadata:
   name: rf-cov
   # us-west-2, NOT the account's usual us-east-2. Every bulk input bucket
   # (overturemaps-us-west-2, ookla-open-data, prd-tnm) lives here, and no
-  # other workload of this account does -- so "nothing of mine should exist in
-  # us-west-2" is a teardown assertion that can be verified in one command
-  # with no risk to unrelated production sites.
+  # unrelated PRODUCTION workload of this account does, so a mistake here cannot
+  # take down a live site.
+  #
+  # ⚠ CORRECTED 2026-08-11. This comment used to claim "nothing of mine should
+  # exist in us-west-2", offered as a teardown assertion verifiable in one
+  # command. That was false: the sibling portfolio repo ~/s2-field-ndvi runs its
+  # own EKS cluster in this same region, and billed $13.80 here on 2026-08-08/09
+  # before this project's cluster existed. So:
+  #   - "is us-west-2 empty" does NOT prove this project is torn down. Verify by
+  #     NAME instead -- `eksctl get cluster --name rf-cov` and the rf-cov-*
+  #     CloudFormation stacks -- which is what `make destroy-all` reports on.
+  #   - a region-scoped budget sees BOTH projects. See budget.tf.
+  # The sibling's runs are finished and torn down cleanly (no orphaned volumes,
+  # no leftover stacks were found), but the assumption must not be re-adopted.
   region: us-west-2
   # No `version:` pin on purpose. EKS charges roughly 6x the standard control
   # plane rate ($0.60/hr vs $0.10/hr) once a Kubernetes version passes into

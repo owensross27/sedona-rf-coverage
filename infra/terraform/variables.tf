@@ -22,10 +22,24 @@ variable "image_retain_count" {
   default     = 3
 }
 
+# RAISED 20 -> 35 on 2026-08-11, and the reason matters more than the number.
+# This budget filters on REGION, and us-west-2 is not exclusive to this project:
+# the sibling repo ~/s2-field-ndvi billed $13.80 here on 08-08/09, taking a $20
+# limit to 74% before this project's first cluster existed. The 50% ACTUAL alert
+# therefore fired for spend that was not ours, and the remaining headroom was
+# ~$5 against a statewide run modelled at $2-4.
+#
+# An alert that mostly reports another project's spend gets ignored, which is
+# the failure this raise prevents. $35 covers the sibling's historical $13.80
+# (finished and torn down, so it will not grow) plus this project's own ~$7
+# projection with room to spare, and still sits below the $45 backstop.
+#
+# This project alone remains a ~$7 job: see README "Cost". If the sibling repo
+# runs here again, re-check this number rather than assuming it still holds.
 variable "budget_limit_usd" {
-  description = "Monthly cost budget for var.aws_region. The statewide run is modelled at ~$21, worst case ~$35. $20 alerts before that, not after."
+  description = "Monthly cost budget for var.aws_region. NOTE the region is shared with the sibling s2-field-ndvi project, so this is sized for the region, not for this repo alone."
   type        = number
-  default     = 20
+  default     = 35
 }
 
 # The outer backstop, deliberately ABOVE the realistic worst case rather than

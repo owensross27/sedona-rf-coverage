@@ -9,10 +9,19 @@
 # monthly budget would alarm on those and say nothing useful about this
 # project.
 #
-# us-west-2 is the correct filter because "nothing of mine should exist in
-# us-west-2" is ALREADY this project's teardown assertion -- see
-# infra/eks/cluster.yaml's metadata.region comment. It captures the entire cost
-# risk: EKS control plane, EC2 spot, EBS, this bucket, this ECR repo.
+# us-west-2 captures this project's entire cost risk -- EKS control plane, EC2
+# spot, EBS, this bucket, this ECR repo -- and excludes the unrelated
+# production sites in other regions, which is what makes a small limit usable.
+#
+# ⚠ IT ALSO CAPTURES MORE THAN THIS PROJECT, learned the hard way 2026-08-11.
+# The region is NOT exclusive to this repo: the sibling portfolio project
+# ~/s2-field-ndvi runs its own EKS cluster here and billed $13.80 on 08-08/09,
+# consuming 69% of a $20 limit before this project's cluster was ever created.
+# A tripwire mostly consumed by somebody else is not a tripwire, so the limit is
+# sized for the region rather than for this project alone -- see
+# var.budget_limit_usd. A cost-allocation tag filter would isolate the two, but
+# activating one takes up to 24 h and is not retroactive, so it cannot fix a
+# month already in progress.
 #
 # Region is a native Cost Explorer dimension, so it needs no setup. A tag
 # filter would have needed `project` activated as a cost allocation tag in
