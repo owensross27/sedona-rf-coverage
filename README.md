@@ -353,8 +353,42 @@ no account identifier appears anywhere in this repository.
 
 There is no official Sedona Kubernetes image, no Helm chart, and no guide. The
 `apache/sedona` image on Docker Hub is explicitly a single-node dev/demo
-build. `docs/eks-runbook.md` (written alongside the statewide run — see
-[Verification](#verification)) documents the gap and ships a working answer.
+build. [`docs/eks-runbook.md`](docs/eks-runbook.md) documents the gap and ships
+a working answer.
+
+![Statewide stage 08 on EKS](docs/img/statewide-run.gif)
+
+One statewide stage, submitted through the spark-operator CRD and run on three
+arm64 spot executors. 402 s from `kubectl apply` to `COMPLETED`, ending with
+the deterministic waste check that gates teardown.
+
+The physical plan is where Sedona stops being a library and starts being a
+query engine. This is the zonal-statistics query from that run — 2.1 minutes,
+`SpatialIndex` and `BroadcastIndexJoin` chosen by the optimizer, not by the
+code:
+
+<img src="docs/img/spark-ui-dag.png" alt="Sedona physical plan: SpatialIndex into BroadcastIndexJoin" width="420">
+
+`Scan binaryFile` is a 39.4 MiB DEM COG; `Generate` explodes it into 121
+raster tiles; `SpatialIndex` builds over 88,281 H3 receiver cells, and
+`BroadcastIndexJoin` pairs tiles to cells in 92,246 rows. Five tiled rasters
+against 88,281 hexes finished in 285 s, and three of those hexes were
+recomputed with rasterio afterwards as a self-check — max delta within 2%, so
+the distributed plan agrees with the single-node answer.
+
+![Spark executors](docs/img/spark-ui-executors.png)
+
+134 tasks and **36 minutes of aggregate task time inside a 6.1 minute wall
+clock** across 3 executors × 6 cores. Zero failed tasks, zero dead executors,
+no spot reclaim during the run.
+
+Both screenshots were taken **after the cluster was destroyed**. The Spark UI
+is served by the driver pod and dies with it, which normally makes
+"screenshot the UI" a task competing with teardown for billable minutes.
+Persisting the event log to S3 (`spark.eventLog.dir`) decouples them: `make
+history` replays it into the real UI locally, for free, as often as wanted.
+The runbook has the two constraints that make it work.
+
 The parts that cost real time:
 
 - **Sedona must be 1.9.1, not 1.9.0.** 1.9.0 carries a `ST_Transform`
