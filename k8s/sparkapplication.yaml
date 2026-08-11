@@ -63,13 +63,31 @@ spec:
       # which Spark re-requests, instead of killing the whole job.
       workload: serve
       kubernetes.io/arch: arm64
-    env:
+    env: &rfc_env
       - name: SCOPE
         value: "${SCOPE}"
       - name: RF_BUCKET
         value: "${RF_BUCKET}"
       - name: RFC_JARS_BAKED
         value: "1"
+      # GDAL reads COGs through /vsis3/, and with no region set it talks to
+      # us-east-1. A us-west-2 bucket answers that with a 301, which rasterio
+      # surfaces as "not a supported file format" -- it reads as a corrupt COG,
+      # not as a misrouted request. boto3 and hadoop-aws are unaffected, so the
+      # failure appears only in the raster stages.
+      - name: AWS_DEFAULT_REGION
+        value: "${AWS_REGION}"
+      # Stage 03 alone needs this, and a keyless request does not error: the
+      # Census API returns HTTP 200 with a redirect to missing_key.html. It
+      # comes from a Secret created by `make cluster-up` so it stays out of a
+      # public repo, and optional:true so the eight stages that do not need it
+      # are not held hostage to it existing.
+      - name: CENSUS_API_KEY
+        valueFrom:
+          secretKeyRef:
+            name: rf-secrets
+            key: CENSUS_API_KEY
+            optional: true
   executor:
     instances: 3
     cores: 6
@@ -79,11 +97,8 @@ spec:
     nodeSelector:
       workload: spark
       kubernetes.io/arch: arm64
-    env:
-      - name: SCOPE
-        value: "${SCOPE}"
-      - name: RF_BUCKET
-        value: "${RF_BUCKET}"
-      - name: RFC_JARS_BAKED
-        value: "1"
+    # Same block as the driver, by anchor rather than by copy. Executors that
+    # silently disagree with the driver about SCOPE or RF_BUCKET produce a run
+    # that half-succeeds against the wrong data, which is worse than a crash.
+    env: *rfc_env
   # No volumes: every input and output is S3. Nothing to orphan on teardown.

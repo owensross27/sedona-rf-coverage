@@ -136,6 +136,16 @@ cluster-up:
 	helm repo add spark-operator https://kubeflow.github.io/spark-operator 2>/dev/null || true
 	helm install spark-operator spark-operator/spark-operator \
 	  --namespace spark-operator --create-namespace --version 2.5.2 --wait
+	@# Stage 03's Census key, from the gitignored .env into a Secret the
+	@# SparkApplication reads by secretKeyRef -- so it reaches the pods without
+	@# ever being written into a tracked file. Idempotent: re-running cluster-up
+	@# or rotating the key applies over the existing Secret rather than erroring.
+	@if [ -f .env ]; then set -a; . ./.env; set +a; \
+	   kubectl create secret generic rf-secrets \
+	     --from-literal=CENSUS_API_KEY="$$CENSUS_API_KEY" \
+	     --dry-run=client -o yaml | kubectl apply -f - >/dev/null; \
+	   echo "== rf-secrets: CENSUS_API_KEY loaded"; \
+	 else echo "== WARNING no .env -- stage 03 will fail at its key guard"; fi
 	@$(MAKE) check-nat
 
 nodes-up:
@@ -168,6 +178,7 @@ spike:
 STAGE ?= 05
 job:
 	STAGE_NAME=$(STAGE) SCOPE=$(SCOPE) RF_BUCKET=$(RF_BUCKET) ECR_IMAGE=$(ECR_IMAGE) \
+	AWS_REGION=$(AWS_REGION) \
 	STAGE_FILE=$$(basename $$(ls src/$(STAGE)_*.py)) \
 	  envsubst < k8s/sparkapplication.yaml | kubectl apply -f -
 	kubectl get sparkapplication -w
