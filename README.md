@@ -370,31 +370,85 @@ The parts that cost real time:
 
 ## Cost
 
-**Spend to date: $0.00.** Every input is an anonymous open S3 bucket and the
-whole demo pipeline runs locally.
+Everything above — every number, map and figure in this README — was produced
+for **under one cent**. The inputs are anonymous open S3 buckets and the demo
+pipeline runs on a laptop. The only standing charge is the container image in
+ECR: **$0.13/month**, for 1.30 GB of compressed layers.
 
-The statewide cloud run is modelled from live us-west-2 spot prices (measured
-2026-08-09, labelled modelled until a real run replaces it) at about **$21**,
-worst case ~$35. The same architecture with eksctl's default NAT gateway, a
-load balancer, and the cluster left up for a week runs about $115 — the saving
-is architectural, not disciplinary:
+That is worth stating precisely because it is a design outcome, not thrift.
+The cluster is for scale, never for development, so almost all the work
+happened before any meter started.
+
+### Two meters, and only one of them is obvious
+
+Measured from the live us-west-2 API on 2026-08-11:
+
+| | Rate | Bills when |
+|---|---|---|
+| EKS control plane | **$0.10/hr** | the cluster *exists* — nodes or not |
+| 3x r7g.2xlarge spot (us-west-2d) | $0.362/hr | only while scaled up |
+| 1x t4g.large on-demand (driver) | $0.067/hr | only while scaled up |
+| EBS, 4x30 GB gp3 | $0.013/hr | only while nodes exist |
+
+So `make nodes-up` costs **$0.44/hr**, and a cluster sitting idle still costs
+**$2.40/day**. The second number is the one that actually causes overruns: it
+accrues while nothing is happening and nothing looks wrong.
+
+The statewide run needs roughly 16 control-plane hours and 9 node hours, or
+about **$6.50** — under the $21 originally modelled, because moving the
+development loop off the cluster removed most of the hours rather than making
+them cheaper.
+
+The same architecture with eksctl's default NAT gateway, a load balancer, and
+the cluster left up for a week runs about $115. The saving is architectural,
+not disciplinary:
 
 - NAT gateway **disabled** (public subnets + IGW reach ECR and S3 for free)
 - single-AZ nodegroups (no cross-AZ shuffle at $0.01/GB each way)
-- no load balancer and no ingress controller (NodePort behind CloudFront)
+- no load balancer and no ingress controller
 - **the public map does not depend on the cluster**, so there is never a
   reason to leave it running
 
-`make status` reports month-to-date spend and asserts no NAT gateway exists;
+### AWS has no hard spending cap
+
+Budgets notify; they do not stop anything. The only native enforcement is a
+Budget Action, and all three of its forms fail on this account:
+
+| Action | Why it does not work here |
+|---|---|
+| `scp_action_definition` | Service control policies never apply to an organization's **management account**, which this is. |
+| `ssm_action_definition` | Needs explicit instance ids. EKS nodes get unpredictable ones from an autoscaling group. |
+| `iam_action_definition` | Blocks the creation of **new** resources. It cannot stop a control plane that is already billing — the exact failure mode above. |
+
+A cap also has to be sized against the realistic disaster, not the worst
+imaginable one. A cluster forgotten for a fortnight is about $34, which sits
+*under* any sensible cap and would never trip it.
+
+So enforcement here is deletion on a timer rather than a billing control.
+[`infra/terraform/reaper.tf`](infra/terraform/reaper.tf) runs an hourly Lambda
+that deletes clusters which are both tagged `lifecycle=ephemeral` and older
+than a TTL, bounding exposure at TTL plus one hour. Two independent gates,
+because the blast radius of a wrong answer is somebody's running cluster, and
+a region-scoped IAM policy as a third. An untagged cluster is never touched,
+so if a future eksctl stops propagating tags the reaper does nothing rather
+than something. The decision is a pure function with a self-check in
+`make test`, so it is verified without an AWS account.
+
+Two budgets sit behind it at $20 and $45 (AWS bills nothing for the first
+two), and `make spike` traps teardown to the session so the ordinary path
+requires no memory.
+
 `make destroy-all` tears down the cluster, the Terraform resources, and scans
-for orphaned EBS volumes.
+for orphaned EBS volumes. `make status` reports month-to-date spend — note
+that Cost Explorer bills per request, so that one command costs $0.01 and is
+deliberately never looped.
 
 ## Evaluated and rejected
 
 | Choice | Why not |
 |---|---|
 | Karpenter / cluster-autoscaler | Two known workload shapes, ~20 hours total. An hour of IAM setup that saves nothing and adds a demo-day failure mode. |
-| ALB or NLB | ~$17/mo plus a controller install, to expose one NodePort that CloudFront already fronts. |
+| ALB or NLB | ~$17/mo plus a controller install, to expose one NodePort. The map is a static file on GitHub Pages, so nothing needs to reach the cluster from the internet at all. A load balancer also holds ENIs that make `eksctl delete cluster` fail, leaving a VPC billing after a teardown that reported success. |
 | martin / pg_tileserv | Both exist to serve tiles from PostGIS. PMTiles serves the same tiles as one static file with no database in the path. |
 | Iceberg | No schema-evolution or incremental-refresh requirement; outputs are COGs and GeoParquet that a browser and DuckDB read directly. |
 | IRSA | hadoop-aws 3.3.4 pairs with AWS SDK v1, making web identity an hour of yak-shaving for ~zero security delta on an ephemeral single-tenant cluster. Documented as the production upgrade. |

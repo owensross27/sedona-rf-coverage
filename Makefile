@@ -10,8 +10,8 @@ ECR_REPO       ?= sedona-rf-coverage
 IMAGE_TAG      ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 ECR_IMAGE       = $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(ECR_REPO):$(IMAGE_TAG)
 
-.PHONY: setup test bench demo pipeline dq ookla surface map tiles web-serve image push preflight \
-        spot-check cluster-up cluster-down nodes-up nodes-down job serve-up dns \
+.PHONY: setup test bench smoke demo pipeline dq ookla surface map tiles web-serve image push preflight \
+        spot-check cluster-up cluster-down nodes-up nodes-down spike job \
         status check-nat cost destroy-all clean
 
 ## --- local, no AWS account required ----------------------------------------
@@ -172,14 +172,17 @@ job:
 	  envsubst < k8s/sparkapplication.yaml | kubectl apply -f -
 	kubectl get sparkapplication -w
 
-serve-up:
-	kubectl apply -k k8s/serving/
-
-# The node's public IP changes on every cluster recreate. CloudFront's origin
-# is a stable hostname pointed here, so only this 60-second-TTL A record moves
-# and the distribution itself is never reconfigured.
-dns:
-	bash scripts/node_dns.sh
+# REMOVED: `serve-up` (kubectl apply -k k8s/serving/) and `dns`
+# (scripts/node_dns.sh). Both pointed at files that were never written, so both
+# failed on invocation -- a broken target in a public repo reads as rot, and
+# they were broken because the architecture moved rather than because the work
+# was pending.
+#
+# The map is one static PMTiles file on GitHub Pages. Nothing needs to reach
+# the cluster from the internet, so there is no NodePort to expose and no A
+# record to move when a node's public IP changes on recreate. Serving the
+# tiles from the cluster would also undo the property the whole design rests
+# on: the public demo has to survive teardown. See README "Cost".
 
 ## --- guardrails -------------------------------------------------------------
 
