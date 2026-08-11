@@ -101,7 +101,12 @@ spec:
             key: CENSUS_API_KEY
             optional: true
   executor:
-    instances: 3
+    # Configurable because the stages are not the same shape. 01/02/03 are
+    # driver-heavy (HTTP fetches, raster merges) and barely touch executors --
+    # holding three spot nodes through them is ~$0.36/hr for nothing. The joins
+    # and the propagation fan-out (04/05/08/09) are what actually want them.
+    # `make job STAGE=02 EXECUTORS=1`.
+    instances: ${EXECUTORS}
     cores: 6
     # SIZED AGAINST THE SMALLEST INSTANCE THE NODEGROUP CAN PRODUCE, not the
     # one the spec was written around. cluster.yaml diversifies spot capacity

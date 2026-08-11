@@ -183,9 +183,11 @@ spike:
 	 read _
 
 STAGE ?= 05
+# Driver-heavy stages (01/02/03) do not need three spot nodes idling behind them.
+EXECUTORS ?= 3
 job:
 	STAGE_NAME=$(STAGE) SCOPE=$(SCOPE) RF_BUCKET=$(RF_BUCKET) ECR_IMAGE=$(ECR_IMAGE) \
-	AWS_REGION=$(AWS_REGION) \
+	AWS_REGION=$(AWS_REGION) EXECUTORS=$(EXECUTORS) \
 	STAGE_FILE=$$(basename $$(ls src/$(STAGE)_*.py)) \
 	  envsubst < k8s/sparkapplication.yaml | kubectl apply -f -
 	kubectl get sparkapplication -w
