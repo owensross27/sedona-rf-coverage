@@ -35,6 +35,19 @@ def colormap():
         "rsrp", [(norm(v), c) for v, c in RAMP]), norm
 
 
+# A MapLibre image source becomes one WebGL texture, and 4096 px is the floor
+# across GPUs that still matters (it is the cap on a lot of mobile hardware).
+# Past it the layer does not error, it just never draws -- a blank overlay on a
+# working map, which is the same silent failure as a dropped hexagon.
+#
+# This binds at state scope and not at demo scope: Kanawha warps to 870x783,
+# West Virginia to roughly 4800x4200. Only the PNG is reduced; the COG keeps
+# every 90 m pixel, because that is the data product. At 4096 px across ~430 km
+# the overlay is ~105 m per pixel against a 90 m source, so what is lost is
+# nearly nothing and what is gained is that it renders at all.
+MAX_TEXTURE_PX = 4096
+
+
 def warp_3857(src_path: str):
     import rasterio
     from rasterio.warp import (Resampling, calculate_default_transform,
@@ -43,6 +56,16 @@ def warp_3857(src_path: str):
     with rasterio.open(src_path) as src:
         transform, width, height = calculate_default_transform(
             src.crs, "EPSG:3857", src.width, src.height, *src.bounds)
+        if max(width, height) > MAX_TEXTURE_PX:
+            s = MAX_TEXTURE_PX / max(width, height)
+            full_w, full_h = width, height
+            width, height = max(1, int(width * s)), max(1, int(height * s))
+            # Scale the pixel size by the SAME factor the raster shrank by, so
+            # the georeferencing still covers the identical ground extent.
+            transform = transform * rasterio.Affine.scale(full_w / width,
+                                                          full_h / height)
+            print(f"  {full_w}x{full_h} -> {width}x{height} "
+                  f"(WebGL texture cap {MAX_TEXTURE_PX})")
         dst = np.full((height, width), src.nodata, dtype="float32")
         reproject(rasterio.band(src, 1), dst, dst_transform=transform,
                   dst_crs="EPSG:3857", dst_nodata=src.nodata,

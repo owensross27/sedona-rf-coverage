@@ -121,7 +121,7 @@ smoke:
 # and their web overlays. Not in `pipeline`: a visualization product with a
 # ~100M-link fan-out that nothing downstream consumes.
 surface:
-	source scripts/java_env.sh; SCOPE=$(SCOPE) LOCAL_OUT=$${LOCAL_OUT:-1} DRIVER_MEM=8g $(VENV)/python scripts/make_surface.py
+	source scripts/java_env.sh; SCOPE=$(SCOPE) LOCAL_OUT=$${LOCAL_OUT:-1} DRIVER_MEM=8g $(VENV)/python src/11_surface.py
 	SCOPE=$(SCOPE) LOCAL_OUT=$${LOCAL_OUT:-1} $(VENV)/python scripts/make_overlays.py
 
 # Static PNG of the coverage surface and the recommended build. Deliberately

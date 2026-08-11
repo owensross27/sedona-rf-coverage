@@ -16,8 +16,15 @@ second run).
 Not part of `make pipeline`: this is a visualization product, ~40-90M links
 at demo scope, and nothing downstream consumes it. `make surface` builds it.
 
+Deliberately NOT in `make pipeline`: it is a visualization product, nothing
+downstream consumes it, and at state scope it is ~30x the work of the whole
+hex-level coverage pass. It is a stage rather than a script because that fan-out
+is cluster-sized: `make job STAGE=11 SCOPE=state` is the only way it runs
+statewide, and `make surface` is the same code on one county on a laptop.
+
 Usage:
-    SCOPE=demo LOCAL_OUT=1 python scripts/make_surface.py
+    SCOPE=demo LOCAL_OUT=1 python src/11_surface.py     # or: make surface
+    make job STAGE=11 SCOPE=state EXECUTORS=3           # statewide, on EKS
 """
 import importlib
 import sys
@@ -27,7 +34,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import RF, scope  # noqa: E402
 from session import assert_versions, get_sedona, out_path  # noqa: E402
@@ -80,7 +87,7 @@ def main() -> int:
     sedona = get_sedona(f"rf-surface-{sc['name']}")
     assert_versions(sedona)
     sedona.sparkContext.addPyFile(
-        str(Path(__file__).resolve().parent.parent / "src" / "propagation.py"))
+        str(Path(__file__).resolve().parent / "propagation.py"))
 
     from rasterio.features import rasterize
     from rasterio.transform import from_origin
