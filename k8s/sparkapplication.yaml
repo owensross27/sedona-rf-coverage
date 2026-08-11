@@ -46,10 +46,22 @@ spec:
     # Shuffle spill goes to a sized emptyDir rather than the container
     # filesystem. The sibling repo recorded a run spilling ~30 GB; the
     # container's writable layer is not the place for that.
-    spark.local.dir: /tmp/spark-local
-    spark.kubernetes.driver.volumes.emptyDir.spark-local.mount.path: /tmp/spark-local
-    spark.kubernetes.executor.volumes.emptyDir.spark-local.mount.path: /tmp/spark-local
-    spark.kubernetes.executor.volumes.emptyDir.spark-local.options.sizeLimit: 20Gi
+    #
+    # THE VOLUME NAME IS LOAD-BEARING. Spark treats any volume named
+    # `spark-local-dir-*` as a local directory: it points SPARK_LOCAL_DIRS at
+    # the mount and skips generating its own emptyDir. Name it anything else
+    # and you get both -- Spark's generated mount plus this one, at the same
+    # path -- and the API server rejects the driver pod outright:
+    #   volumeMounts[2].mountPath: Invalid value: "/tmp/spark-local": must be unique
+    # which arrives as a 422 wrapped in a fabric8 stack trace, under a
+    # misleading `Please check "kubectl auth can-i create pod"` line that sends
+    # you hunting an RBAC problem that does not exist.
+    #
+    # Setting spark.local.dir explicitly causes the same collision, so it is
+    # deliberately absent: the volume name is now the single source of truth.
+    spark.kubernetes.driver.volumes.emptyDir.spark-local-dir-1.mount.path: /tmp/spark-local
+    spark.kubernetes.executor.volumes.emptyDir.spark-local-dir-1.mount.path: /tmp/spark-local
+    spark.kubernetes.executor.volumes.emptyDir.spark-local-dir-1.options.sizeLimit: 20Gi
   driver:
     cores: 1
     # PySpark's memory overhead factor is 0.4, NOT the 0.1 that applies to
@@ -91,9 +103,22 @@ spec:
   executor:
     instances: 3
     cores: 6
-    # 24g x 1.4 overhead = ~33.6 GiB, sized to one executor per r7g.2xlarge
-    # (64 GiB) with headroom for the kubelet and the broadcast terrain arrays.
-    memory: 24g
+    # SIZED AGAINST THE SMALLEST INSTANCE THE NODEGROUP CAN PRODUCE, not the
+    # one the spec was written around. cluster.yaml diversifies spot capacity
+    # across four types whose memory is NOT uniform -- r7g.2xlarge and
+    # m7g.4xlarge are 64 GiB, m7g.2xlarge and c7g.4xlarge are 32 GiB -- and
+    # capacity-optimized allocation is free to pick any of them. It picked
+    # m7g.2xlarge, the cheapest in the pool at the time ($0.1094/hr), so
+    # getting the good price is what triggered this.
+    #
+    # An earlier 24g here assumed r7g.2xlarge: 24 x 1.4 = 33.6 GiB against a
+    # measured 29.8 GiB allocatable, so every executor sat Pending forever with
+    # `0/4 nodes are available: 3 Insufficient memory` while the driver ran
+    # happily and the job looked alive. 20 x 1.4 = 28 GiB fits the 32 GiB
+    # machines with room for the kubelet; on a 64 GiB node it simply leaves
+    # headroom. Verify allocatable rather than subtracting from the spec sheet:
+    #   kubectl get nodes -l workload=spark -o json | ...status.allocatable
+    memory: 20g
     nodeSelector:
       workload: spark
       kubernetes.io/arch: arm64

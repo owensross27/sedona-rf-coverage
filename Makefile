@@ -12,7 +12,7 @@ ECR_IMAGE       = $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(ECR_RE
 
 .PHONY: setup test bench smoke demo pipeline dq ookla surface map tiles web-serve image push preflight \
         spot-check cluster-up cluster-down nodes-up nodes-down spike job \
-        status check-nat cost destroy-all clean
+        status check-nat watch watch-loop cost destroy-all clean
 
 ## --- local, no AWS account required ----------------------------------------
 
@@ -133,6 +133,13 @@ spot-check:
 
 cluster-up:
 	RF_BUCKET=$(RF_BUCKET) envsubst < infra/eks/cluster.yaml | eksctl create cluster -f -
+	@# Both nodegroups are created at desiredCapacity 0, so the cluster comes up
+	@# with ZERO nodes -- coredns sits Pending, and so would anything else. The
+	@# helm install below uses --wait, which would then block on a pod that has
+	@# nowhere to run until it times out. Bring the single on-demand serve node
+	@# up first. It is not extra cost: the operator and the Spark driver both
+	@# live on this node whenever the cluster is doing anything at all.
+	eksctl scale nodegroup --cluster $(CLUSTER) --name serve --nodes 1 --region $(AWS_REGION)
 	helm repo add spark-operator https://kubeflow.github.io/spark-operator 2>/dev/null || true
 	helm install spark-operator spark-operator/spark-operator \
 	  --namespace spark-operator --create-namespace --version 2.5.2 --wait
@@ -207,6 +214,24 @@ status:
 	  aws ce get-cost-and-usage --time-period Start=$$(date -u +%Y-%m-01),End=$$(date -u +%Y-%m-%d) \
 	    --granularity MONTHLY --metrics UnblendedCost \
 	    --query 'ResultsByTime[0].Total.UnblendedCost.Amount' --output text 2>/dev/null || true
+
+# Deterministic waste detector: exits non-zero when the cluster is BILLING
+# WITHOUT PROGRESSING. Every check in it is one that already cost money --
+# Pending executors while the job reports RUNNING, spot nodes up with no job,
+# image-pull loops retrying forever, a cluster past its timebox.
+#
+# Unlike `make status` this costs nothing (no Cost Explorer call), so it is the
+# one safe to put in a loop. Run it in a second terminal for the whole session:
+#   make watch-loop
+watch:
+	@bash scripts/cluster_watch.sh
+
+# 60 s cadence: a node joins in ~40 s and the image pull is ~2 min, so this
+# notices a genuine stall within a couple of cycles while never firing on
+# normal startup. Deliberately does not exit on a finding -- it prints and
+# keeps watching, because the point is to be looked at, not to be acknowledged.
+watch-loop:
+	@while true; do date -u +'--- %H:%M:%SZ'; bash scripts/cluster_watch.sh || true; sleep 60; done
 
 # eksctl's default would have created a NAT gateway. Assert it did not.
 check-nat:

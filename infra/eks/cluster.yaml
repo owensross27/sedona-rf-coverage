@@ -136,14 +136,31 @@ managedNodeGroups:
         - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
         - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
         - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+      # SAME WRITE PERMISSIONS AS spark-spot, and that is not over-provisioning.
+      # This group's name suggests it only serves reads, but the Spark DRIVER is
+      # pinned here by nodeSelector (see k8s/sparkapplication.yaml), and the S3A
+      # committer performs its rename from the driver -- a rename on S3 is a
+      # copy followed by a DELETE.
+      #
+      # Without s3:DeleteObject the job runs to completion and then dies on the
+      # commit, after every executor has finished its work:
+      #   AccessDeniedException: delete on s3a://.../bronze/towers/_temporary/...
+      #   is not authorized to perform: s3:DeleteObject
+      # The wasted spend is the whole job, not the failed step.
       attachPolicy:
         Version: "2012-10-17"
         Statement:
           - Effect: Allow
-            Action: [s3:GetObject, s3:PutObject, s3:ListBucket]
-            Resource:
-              - "arn:aws:s3:::${RF_BUCKET}"
-              - "arn:aws:s3:::${RF_BUCKET}/*"
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+              - s3:AbortMultipartUpload
+              - s3:ListBucketMultipartUploads
+            Resource: "arn:aws:s3:::${RF_BUCKET}/*"
+          - Effect: Allow
+            Action: [s3:ListBucket, s3:GetBucketLocation, s3:ListBucketMultipartUploads]
+            Resource: "arn:aws:s3:::${RF_BUCKET}"
     labels:
       workload: serve
     tags:
