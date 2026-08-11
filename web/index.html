@@ -351,9 +351,18 @@ function buildOverlay() {
   // same class of lie as a dropped hexagon. Measured, not hypothesised: a
   // sandboxed browser that strips Range headers from worker requests makes
   // pmtiles fail with exactly this, and the page said nothing at all.
+  // ...and clears itself if they arrive after all. A tile request can fail
+  // once and succeed on retry; a warning left standing over a map that is now
+  // drawing correctly is its own kind of false statement.
+  map.on("sourcedata", e => {
+    if (e.sourceId !== "rf" || !map.isSourceLoaded("rf")) return;
+    const el = document.getElementById("tileerr");
+    if (el) el.style.display = "none";
+  });
   map.on("error", e => {
     const msg = String((e && e.error && e.error.message) || (e && e.message) || e);
     if (!/pmtiles|byte serving|content-length|rf\.pmtiles/i.test(msg)) return;
+    if (map.isSourceLoaded("rf")) return;   // already recovered
     const el = document.getElementById("tileerr");
     if (!el || el.style.display === "block") return;
     el.style.display = "block";
