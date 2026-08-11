@@ -99,6 +99,34 @@ else
   say "schedulable spark nodes=$spark_nodes active jobs=$active"
 fi
 
+# AN IDLE CLUSTER WITH ZERO SPOT NODES IS STILL BILLING, and the check above
+# cannot see it. Found the hard way: after the first spike the spot group went
+# to 0 and this script reported "clean" for 2.5 hours while the control plane
+# and the serve node quietly burned $0.167/hr. Only the age check noticed, at
+# 3h, and only by coincidence.
+#
+# Scaling nodes down is not the same as stopping the meter. The signal is the
+# newest SparkApplication having finished a while ago with nothing to replace
+# it -- which distinguishes a genuinely abandoned cluster from the minutes
+# between two stages of a pipeline.
+if [ "${active:-0}" -eq 0 ]; then
+  last_finish=$(kubectl get sparkapplication -A \
+    -o go-template='{{range .items}}{{if .status.terminationTime}}{{.status.terminationTime}}{{"\n"}}{{end}}{{end}}' 2>/dev/null | sort | tail -1)
+  if [ -n "$last_finish" ]; then
+    lf=$(date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$last_finish" +%s 2>/dev/null || date -u -d "$last_finish" +%s 2>/dev/null || echo 0)
+    if [ "$lf" -gt 0 ]; then
+      idle=$(( ($(date -u +%s) - lf) / 60 ))
+      if [ "$idle" -ge "$IDLE_MAX_MIN" ]; then
+        flag "cluster idle ${idle}m since the last job finished -- \$0.167/hr for nothing. 'make cluster-down'"
+      else
+        say "idle ${idle}m since last job (under ${IDLE_MAX_MIN}m)"
+      fi
+    else
+      flag "could not parse terminationTime ([$last_finish]) -- idle check DID NOT RUN"
+    fi
+  fi
+fi
+
 # --- cluster age -------------------------------------------------------------
 echo "== age"
 created=$(aws eks describe-cluster --name "$CLUSTER" --region "$AWS_REGION" \
