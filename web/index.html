@@ -18,10 +18,15 @@
     position: absolute; z-index: 2; background: rgba(255,255,255,.95);
     border-radius: 8px; box-shadow: 0 1px 6px rgba(0,0,0,.3); font-size: 13px;
   }
-  #controls { top: 10px; left: 10px; padding: 10px 12px; max-width: 240px; }
+  /* The two left-hand panels are capped so they cannot collide. They used to
+     be free-height and the click panel grew under the controls, overlapping
+     it: two stacks of text on top of each other, which reads as a broken
+     page rather than a dense one. 52 + 40 vh leaves room for both. */
+  #controls { top: 10px; left: 10px; padding: 10px 12px; max-width: 240px;
+              max-height: 52vh; overflow-y: auto; }
   #controls h1 { font-size: 14px; margin: 0 0 6px; }
   #controls label { display: block; margin: 2px 0; cursor: pointer; }
-  #controls .note { color: #666; font-size: 11px; margin-top: 6px; }
+  #controls .note { color: #777; font-size: 10.5px; line-height: 1.3; margin-top: 5px; }
   #search { position: relative; margin: 6px 0 2px; }
   #q { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px;
        border: 1px solid #ccc; border-radius: 4px; padding: 4px 6px; }
@@ -37,7 +42,13 @@
   #filters label { font-size: 12px; }
   #filters .n { color: #666; }
   #info { bottom: 24px; left: 10px; padding: 10px 12px; max-width: 300px;
-          display: none; max-height: 62vh; overflow-y: auto; }
+          display: none; max-height: 40vh; overflow-y: auto; }
+  /* The link budget is the answer to "how was this computed", which is a
+     question you ask once. Left expanded it was eight lines of dense prose
+     under every click, which buries the six numbers above it. */
+  #info details { margin-top: 6px; padding-top: 6px; border-top: 1px solid #ddd; }
+  #info summary { cursor: pointer; color: #06c; font-size: 12px; }
+  #info details p { margin: 6px 0 0; color: #444; }
   #info h2 { font-size: 13px; margin: 0 0 4px; }
   #info .sub { color: #666; font-size: 11px; margin-bottom: 4px; }
   #info td { padding: 1px 6px 1px 0; vertical-align: top; }
@@ -708,10 +719,10 @@ async function showFootprint(txId, title, subtitle) {
     <div class="sub">${subtitle}</div>
     <table>${rows.map(([k, v]) =>
       `<tr><td>${k}</td><td><b>${v}</b></td></tr>`).join("")}</table>
-    <div class="why">${budgetText()}
+    <details><summary>How this is computed</summary><p>${budgetText()}
       <a href="https://github.com/owensross27/sedona-rf-coverage/blob/main/docs/link-budget.md"
-         target="_blank" rel="noopener">Full link budget</a> ·
-      <a href="#" id="fpclear">clear footprint</a></div>`;
+         target="_blank" rel="noopener">Full link budget</a>.</p></details>
+    <div class="why"><a href="#" id="fpclear">clear footprint</a></div>`;
   document.getElementById("fpclear").onclick = e => {
     e.preventDefault();
     clearFootprint();
@@ -724,7 +735,7 @@ async function showFootprint(txId, title, subtitle) {
 // map. Every term below is a term the kernel actually subtracts.
 function budgetText() {
   const rf = META.rf || {};
-  return `<b>How this is computed.</b> ${rf.eirp_dbm} dBm EIRP spread over `
+  return `${rf.eirp_dbm} dBm EIRP spread over `
     + `${rf.subcarriers} subcarriers, minus free-space loss at `
     + `${META.frequency_mhz} MHz, minus terrain diffraction (Deygout, up to `
     + `three knife edges over a ${rf.profile_samples}-sample elevation profile `
