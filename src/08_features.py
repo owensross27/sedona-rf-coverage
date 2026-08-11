@@ -42,6 +42,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import RF, scope  # noqa: E402
 from session import assert_versions, get_sedona, out_path  # noqa: E402
+# GDAL does not understand the s3a:// scheme that out_path returns, so every
+# rasterio call in this file must route through gdal_path (-> /vsis3/). Hoisted
+# to module scope because two separate places need it and one of them did not
+# have it, which only surfaced at SCOPE=state -- see the self-check below.
+from sources import gdal_path  # noqa: E402
 
 coverage06 = importlib.import_module("06_coverage")
 
@@ -122,7 +127,6 @@ def gap_mask_cog(sedona) -> None:
     dest = out_path("cog", "coverage_gap_mask_5070_90m.tif")
     with MemoryFile(bytes(row.cog)) as mem, mem.open() as src:
         profile = src.profile
-        from sources import gdal_path
         with rasterio.open(gdal_path(dest), "w", **profile) as dst:
             dst.write(src.read())
     print(f"wrote {dest} (RS_MapAlgebra -> RS_AsCOG)")
@@ -145,7 +149,13 @@ def self_check(sedona, feats: pd.DataFrame) -> None:
     hx = sedona.sql("SELECT h3_r8, ST_AsText(geom) AS wkt FROM hx").toPandas() \
         .set_index("h3_r8")
     import shapely.wkt as swkt
-    with rasterio.open(out_path("cog", "dem_5070_90m.tif")) as src:
+    # gdal_path, NOT the bare out_path. This is the one rasterio call in the
+    # file that lacked it, and LOCAL_OUT=1 hid that for every demo-scope run:
+    # out_path returns a local filesystem path there, so GDAL was happy. At
+    # SCOPE=state it returns s3a://, which GDAL has never heard of, and the
+    # failure reads as a missing file rather than an unsupported scheme:
+    #   RasterioIOError: s3a://.../cog/dem_5070_90m.tif: No such file or directory
+    with rasterio.open(gdal_path(out_path("cog", "dem_5070_90m.tif"))) as src:
         dem = src.read(1)
         for h3_id, row in rows.iterrows():
             geom = swkt.loads(hx.loc[h3_id, "wkt"])
