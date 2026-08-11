@@ -13,18 +13,22 @@ plan as stage 05 (ST_DWithin pair generation, mapInPandas kernel, one pass --
 the upgraded surface is a second aggregation over the same pairs, not a
 second run).
 
-Not part of `make pipeline`: this is a visualization product, ~40-90M links
-at demo scope, and nothing downstream consumes it. `make surface` builds it.
+Deliberately NOT in `make pipeline`: it is a visualization product and nothing
+downstream consumes it. ~100M links at demo scope, 0.93 billion statewide.
 
-Deliberately NOT in `make pipeline`: it is a visualization product, nothing
-downstream consumes it, and at state scope it is ~30x the work of the whole
-hex-level coverage pass. It is a stage rather than a script because that fan-out
-is cluster-sized: `make job STAGE=11 SCOPE=state` is the only way it runs
-statewide, and `make surface` is the same code on one county on a laptop.
+MEASURED, because the estimate was wrong twice: statewide is 7,747,580
+in-scope pixels against 6,716 transmitters, and it runs in 4,521 s (75 min) on
+a laptop in CHUNK_PX-sized pieces. The project ledger called this "cluster
+only" on the assumption of several hundred transmitters in range per pixel;
+the real figure is ~116, because West Virginia's structures cluster along the
+valleys rather than spreading evenly. It is a stage rather than a script
+because it is a Spark job -- which also makes it submittable with
+`make job STAGE=11` -- not because it needs a cluster.
 
 Usage:
-    SCOPE=demo LOCAL_OUT=1 python src/11_surface.py     # or: make surface
-    make job STAGE=11 SCOPE=state EXECUTORS=3           # statewide, on EKS
+    SCOPE=demo  LOCAL_OUT=1 python src/11_surface.py    # or: make surface
+    SCOPE=state LOCAL_OUT=1 python src/11_surface.py    # 75 min on a laptop
+    make job STAGE=11 SCOPE=state EXECUTORS=3           # or on the cluster
 """
 import importlib
 import sys
@@ -209,7 +213,7 @@ def main() -> int:
               f"{THRESHOLD:.0f} dBm")
     newly = (mask & (cur < THRESHOLD) & (upg >= THRESHOLD)).sum()
     print(f"  newly covered by the 20 sites: {newly:,} pixels "
-          f"({newly / live:.1%} of the county)")
+          f"({newly / live:.1%} of {sc['name']} scope)")
     return 0
 
 

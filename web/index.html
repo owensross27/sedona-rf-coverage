@@ -397,15 +397,15 @@ async function loadSurfaces() {
   };
   for (const [mode, s] of Object.entries(surfaces)) {
     if (!meta[s.key]) continue;
-    map.addSource(mode, { type: "image", url: `data/${s.key}.png`,
-                          coordinates: meta[s.key] });
-    // Below the hexes so hover/click outlines stay visible; the hex fill is
-    // dropped to near-zero opacity in surface modes rather than hidden, so
-    // the click-a-hex panel keeps working on top of the raster.
-    map.addLayer({ id: mode, type: "raster", source: mode,
-                   paint: { "raster-opacity": 1.0 },
-                   layout: { visibility: "none" } }, "hexes");
-    MODES[mode] = { raster: true, label: s.label, legend: RSRP_LEGEND };
+    // The source is DECLARED here and added on first selection (see setMode).
+    // Statewide these two PNGs are 12 MB each, and a MapLibre image source
+    // fetches its URL the moment it is added -- so eagerly adding both spent
+    // 24 MB of every visitor's bandwidth, and ~130 MB of their memory once
+    // decoded, to serve a mode most of them never open. Same reasoning as the
+    // footprint blob being range-fetched on click rather than loaded up front.
+    MODES[mode] = { raster: true, label: s.label, legend: RSRP_LEGEND,
+                    src: { type: "image", url: `data/${s.key}.png`,
+                           coordinates: meta[s.key] } };
     const label = document.createElement("label");
     label.innerHTML = `<input type="radio" name="mode" value="${mode}"> ${s.label}`;
     document.getElementById("modes").appendChild(label);
@@ -515,6 +515,16 @@ map.on("style.load", () => {
 function setMode(key) {
   const m = MODES[key];
   CURRENT_MODE = key;
+  // Add the raster on first selection, not at load. Below the hexes so
+  // hover/click outlines stay visible; the hex fill is dropped to near-zero
+  // opacity in surface modes rather than hidden, so the click-a-hex panel
+  // keeps working on top of the raster.
+  if (m.raster && m.src && !map.getSource(key)) {
+    map.addSource(key, m.src);
+    map.addLayer({ id: key, type: "raster", source: key,
+                   paint: { "raster-opacity": 1.0 },
+                   layout: { visibility: "none" } }, "hexes");
+  }
   for (const id of ["surf_cur", "surf_new"])
     if (map.getLayer(id))
       map.setLayoutProperty(id, "visibility",

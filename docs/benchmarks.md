@@ -82,6 +82,30 @@ gate (180 m DEM, 64 profile samples, 30 km link radius, each roughly a 2x
 saving). None were used. They are recorded here only so the decision trail is
 legible.
 
+## Per-pixel surface, SCOPE=state
+
+`make surface` at state scope, measured 2026-08-11 on the laptop tier (local
+Spark, 8 GB driver), not on the cluster.
+
+| Metric | Measured |
+|---|---|
+| In-scope 90 m pixels | 7,747,580 (of a 4408x4402 grid) |
+| Transmitters | 6,716 (6,696 registered + 20 recommended) |
+| Transmitter/pixel pairs evaluated | ~0.93 billion |
+| Wall clock, kernel + aggregation | 4,521 s (75 min), 6 receiver chunks |
+| Ground served at -105 dBm, today | 64.3% |
+| Ground served after the 20 sites | 66.7% (185,840 pixels newly covered) |
+
+The pair count is ~116 transmitters in range per receiver, not the several
+hundred assumed when this stage was first called cluster-only: West Virginia's
+structures cluster along the valleys rather than spreading evenly. Measuring
+that before provisioning anything is what kept this run on a laptop.
+
+**Cross-check, and the strongest one available without ground truth:** 64.3% of
+pixels against 63.6% of hexagons. Two receiver sets 88x apart in density,
+resolved separately through the same kernel, landing 0.7 points apart. Demo
+scope agrees the same way (67.1% against 67.4%).
+
 ## AWS spend
 
 Pulled from the live us-west-2 billing API on 2026-08-11, the same figure as the

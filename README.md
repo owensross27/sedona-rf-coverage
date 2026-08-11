@@ -108,14 +108,21 @@ cell-weighted one.
 ![Per-pixel propagation surfaces](docs/img/surface.png)
 
 The hexagons are the analysis unit; the picture above is the same physics at
-every 90 m pixel (`make surface`, ~100M links in one Spark pass): today's
-best-server RSRP, the surface after the optimizer's 20 recommended sites, and
-the ground those sites newly cover. Per-pixel coverage lands at 67.1% against
-the hex grid's 67.4%: two receiver sets, one model, same answer. Both
-surfaces are toggleable layers in the interactive map when they were built at
-the tileset's own scope. The shipped surfaces are demo scope against a
-statewide tileset, so the map hides both until `make surface SCOPE=state` has
-run on the cluster. See [Limitations](#limitations).
+every 90 m pixel (`make surface`): today's best-server RSRP, the surface after
+the optimizer's 20 recommended sites, and the ground those sites newly cover.
+
+**This has now run statewide**: 7,747,580 in-scope pixels against 6,716
+transmitters, 0.93 billion evaluated links, 75 minutes, and both surfaces are
+toggleable layers on the interactive map. Statewide, 64.3% of ground is served
+today and 66.7% after the 20 recommended sites, which newly cover 185,840
+pixels.
+
+**That is the model's best independent check.** 64.3% of *pixels* against
+63.6% of *hexagons* is two receiver sets, 88 times apart in density, resolved
+separately through the same kernel and landing 0.7 points apart. Demo scope
+agrees the same way, 67.1% against 67.4%. Nothing forces that: the hex grid
+samples one point per 0.74 km2 cell and the surface samples every 90 m, so a
+kernel with a geometry bug would drift between them.
 
 ## Why West Virginia
 
@@ -605,12 +612,15 @@ Stated up front rather than discovered by a reader. The quantified ones are in
 - Deygout over-predicts loss when several edges are of similar prominence, used anyway because the single-knife-edge alternative *under*-predicts in
   multi-ridge terrain, and the direction of error that flatters the result is
   the one to avoid.
-- The per-pixel surface layers are demo scope only today. `make surface` has
-  not been run statewide, so the shipped `surface_meta.json` is demo scope
-  while the tileset is state scope, and the map hides a surface mode whenever
-  those two disagree rather than float a county-sized patch of colour over a
-  state and caption it as the state's signal surface. The statewide map
-  therefore offers six modes where a demo-scope build offers eight.
+- The per-pixel surfaces are a 12 MB PNG each, capped at 4096 px on the long
+  side because a MapLibre image source is one WebGL texture and past that
+  floor the layer silently never draws. Statewide that is ~105 m per pixel
+  against a 90 m source. They load on first selection rather than at page
+  load, so opening the map does not spend 24 MB on two modes most readers
+  never open. The map also hides a surface mode outright whenever
+  `surface_meta.json` and the tileset disagree about scope, rather than float
+  a county-sized patch of colour over a state and caption it as the state's
+  signal surface.
 - A per-transmitter footprint stops at -115 dBm, 10 dB below the coverage
   threshold. That is a shipping decision, not a physical edge: 2.29M modelled
   links clear the -125 dBm floor statewide and 1.20M clear -115, so carrying
