@@ -89,6 +89,17 @@ spec:
       # failure appears only in the raster stages.
       - name: AWS_DEFAULT_REGION
         value: "${AWS_REGION}"
+      # The Spark image's user has no home directory (HOME=/nonexistent), which
+      # nothing notices until duckdb runs: 02_terrain reads Overture buildings
+      # through it, and duckdb resolves a home for its config on startup --
+      #   _duckdb.IOException: IO Error: Can't find the home directory at
+      #   '/nonexistent'
+      # It cannot reproduce locally, where HOME is always set. /tmp is
+      # world-writable in the image and duckdb needs nowhere durable here: the
+      # spatial extension is deliberately never installed (the bbox struct
+      # supplies both the pruning and the coordinate), so this is config only.
+      - name: HOME
+        value: /tmp
       # Stage 03 alone needs this, and a keyless request does not error: the
       # Census API returns HTTP 200 with a redirect to missing_key.html. It
       # comes from a Secret created by `make cluster-up` so it stays out of a

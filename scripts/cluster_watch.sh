@@ -29,8 +29,25 @@ set -uo pipefail
 PENDING_MAX_MIN=${PENDING_MAX_MIN:-5}     # pod Pending longer than this is stuck
 IDLE_MAX_MIN=${IDLE_MAX_MIN:-10}          # nodes up, no job, longer than this is waste
 AGE_WARN_HOURS=${AGE_WARN_HOURS:-3}       # cluster older than this, against a 4h timebox
+BOOTSTRAP_GRACE_MIN=${BOOTSTRAP_GRACE_MIN:-20}  # kube-system may be Pending this long after create
 CLUSTER=${CLUSTER:-rf-cov}
 AWS_REGION=${AWS_REGION:-us-west-2}
+
+# Cluster age is needed by the scheduling check below (bootstrap grace) as well
+# as by the age check at the end, so it is resolved once, up front.
+# NB AWS CLI v1 returns this as a Unix epoch FLOAT; v2 returns ISO 8601.
+created=$(aws eks describe-cluster --name "$CLUSTER" --region "$AWS_REGION" \
+          --query 'cluster.createdAt' --output text 2>/dev/null)
+CLUSTER_EPOCH=0
+if [ -n "$created" ] && [ "$created" != "None" ]; then
+  if [ "${created%%.*}" -eq "${created%%.*}" ] 2>/dev/null; then
+    CLUSTER_EPOCH=${created%%.*}
+  else
+    CLUSTER_EPOCH=$(date -u -j -f "%Y-%m-%dT%H:%M:%S" "${created%%.*}" +%s 2>/dev/null || date -u -d "${created%%.*}" +%s 2>/dev/null || echo 0)
+  fi
+fi
+CLUSTER_AGE_MIN=999
+[ "$CLUSTER_EPOCH" -gt 0 ] && CLUSTER_AGE_MIN=$(( ($(date -u +%s) - CLUSTER_EPOCH) / 60 ))
 
 findings=0
 say()  { printf '  %s\n' "$1"; }
@@ -58,7 +75,19 @@ if [ -n "$stuck" ]; then
     # BSD date on macOS, GNU date in a container -- try both rather than assume.
     born=$(date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$ts" +%s 2>/dev/null || date -u -d "$ts" +%s 2>/dev/null || echo "$now")
     mins=$(( (now - born) / 60 ))
-    if [ "$mins" -ge "$PENDING_MAX_MIN" ]; then
+    # BOOTSTRAP GRACE. eksctl creates the control plane ~12 min before any node
+    # joins, so during cluster-up every kube-system pod (coredns first) is
+    # legitimately Pending with "no nodes available to schedule pods". Flagging
+    # that fires the alarm on every single cluster creation, which trains you to
+    # ignore it -- the same cry-wolf failure as the scale-down case below.
+    #
+    # Scoped deliberately narrowly: only kube-system, and only while the cluster
+    # is young. A Spark pod Pending during bootstrap is still a real finding, and
+    # so is a kube-system pod Pending after the grace period -- that is exactly
+    # the `helm --wait` with zero nodes bug this script was written for.
+    if [ "${name%%/*}" = "kube-system" ] && [ "${CLUSTER_AGE_MIN:-999}" -lt "$BOOTSTRAP_GRACE_MIN" ]; then
+      say "$name Pending ${mins}m (cluster bootstrapping, ${CLUSTER_AGE_MIN}m old -- expected)"
+    elif [ "$mins" -ge "$PENDING_MAX_MIN" ]; then
       flag "$name Pending ${mins}m -- billing, not running. Why:"
       kubectl describe pod "${name#*/}" -n "${name%%/*}" 2>/dev/null \
         | grep -m1 -A2 'FailedScheduling' | sed 's/^/         /'
@@ -129,24 +158,13 @@ fi
 
 # --- cluster age -------------------------------------------------------------
 echo "== age"
-created=$(aws eks describe-cluster --name "$CLUSTER" --region "$AWS_REGION" \
-          --query 'cluster.createdAt' --output text 2>/dev/null)
 if [ -n "$created" ] && [ "$created" != "None" ]; then
-  # AWS CLI v1 returns createdAt as a Unix epoch FLOAT (1786415917.459); v2
-  # returns ISO 8601. Handle both -- assuming ISO made this check fail silently
-  # and print nothing at all, which is the worst possible behaviour for a
-  # monitor: it looked like it had passed.
-  if [ "${created%%.*}" -eq "${created%%.*}" ] 2>/dev/null; then
-    cs=${created%%.*}
-  else
-    cs=$(date -u -j -f "%Y-%m-%dT%H:%M:%S" "${created%%.*}" +%s 2>/dev/null || date -u -d "${created%%.*}" +%s 2>/dev/null || echo 0)
-  fi
-  if [ "$cs" -gt 0 ]; then
-    hrs=$(( ($(date -u +%s) - cs) / 3600 ))
+  if [ "$CLUSTER_EPOCH" -gt 0 ]; then
+    hrs=$(( CLUSTER_AGE_MIN / 60 ))
     if [ "$hrs" -ge "$AGE_WARN_HOURS" ]; then
       flag "cluster is ${hrs}h old (timebox 4h, reaper deletes at TTL)"
     else
-      say "cluster ${hrs}h old"
+      say "cluster ${hrs}h old (${CLUSTER_AGE_MIN}m)"
     fi
   else
     # Never fall through quietly: an unparsed timestamp must be visible, or the
