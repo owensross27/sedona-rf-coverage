@@ -45,6 +45,11 @@ links05 = importlib.import_module("05_links")
 THRESHOLD = float(RF["rsrp_threshold_dbm"])
 RADIUS_M = float(RF["max_link_km"]) * 1000.0
 NODATA = -9999.0
+# Receivers per chunk. Sized so one chunk is about the demo-scope job that has
+# always run on a laptop (~290k pixels x ~340 towers in range = ~100M pairs);
+# statewide that is ~116 towers in range, so 1.5M pixels lands in the same
+# place. Raise it on a machine with room, lower it if a chunk spills.
+CHUNK_PX = 1_500_000
 # Pixels below this go out as the floor value rather than accumulating
 # billions of hopeless rows through the shuffle.
 FLOOR = -125.0
@@ -108,20 +113,6 @@ def main() -> int:
     sedona.createDataFrame(tx).selectExpr(
         "asr_id", "tx_height_m", "ST_Point(x, y) AS geom"
     ).createOrReplaceTempView("tx")
-    sedona.createDataFrame(px).selectExpr(
-        "pix", "ST_Point(x, y) AS center"
-    ).createOrReplaceTempView("px")
-
-    # Identical shape to 05: ST_DWithin fan-out, kernel, floor filter. The
-    # pixel id rides in the h3_r8 slot -- the kernel treats it as an opaque
-    # long either way.
-    pairs = sedona.sql(f"""
-        SELECT t.asr_id, p.pix AS h3_r8,
-               ST_X(t.geom) AS tx_x, ST_Y(t.geom) AS tx_y, t.tx_height_m,
-               ST_X(p.center) AS rx_x, ST_Y(p.center) AS rx_y
-        FROM tx t JOIN px p ON ST_DWithin(t.geom, p.center, {RADIUS_M})
-    """).repartition(96)
-
     grid = links05.load_terrain(
         out_path("cog", "dem_5070_90m.tif"),
         out_path("cog", "clutter_5070_90m.tif"),
@@ -129,18 +120,59 @@ def main() -> int:
     )
     bcast = sedona.sparkContext.broadcast(grid)
 
+    # RUN THE RECEIVERS IN CHUNKS. The whole state in one job is 0.93 billion
+    # pairs, and it died twice on this laptop: first as "SparkOutOfMemoryError:
+    # ... No space left on device" (a DISK error wearing a memory error's name,
+    # from a `.repartition(96)` that redistributed 50 GB of fan-out), then as a
+    # dead SparkContext once the machine ran out of headroom entirely.
+    #
+    # A pixel's RSRP depends only on that pixel and the transmitters near it,
+    # so the receiver set splits with no interaction at all: the `tx` view is
+    # never chunked, so every transmitter within max_link_km is still joined to
+    # every pixel, and there is no such thing as a seam. Each chunk is about
+    # the size of the demo-scope job that has always run here.
+    #
+    # This is not a cluster's alternative, it is what makes the stage portable:
+    # `make job STAGE=11 SCOPE=state` runs the same code, and bounded chunks
+    # keep a spot node's ephemeral disk out of the failure modes above.
+    parts = []
     t0 = time.perf_counter()
-    out = pairs.mapInPandas(links05.make_kernel(bcast),
-                            schema=links05.OUT_SCHEMA)
-    out.filter(f"rsrp_dbm >= {FLOOR}").createOrReplaceTempView("links")
-    # One pass, two surfaces: the current one simply ignores NEW: rows.
-    agg = sedona.sql("""
-        SELECT h3_r8 AS pix,
-               MAX(rsrp_dbm) AS rsrp_all,
-               MAX(CASE WHEN asr_id NOT LIKE 'NEW:%' THEN rsrp_dbm END)
-                   AS rsrp_cur
-        FROM links GROUP BY h3_r8
-    """).toPandas()
+    n_chunks = (len(px) + CHUNK_PX - 1) // CHUNK_PX
+    for i in range(n_chunks):
+        chunk = px.iloc[i * CHUNK_PX:(i + 1) * CHUNK_PX]
+        sedona.createDataFrame(chunk).selectExpr(
+            "pix", "ST_Point(x, y) AS center"
+        ).repartition(96).createOrReplaceTempView("px")
+
+        # Identical shape to 05: ST_DWithin fan-out, kernel, floor filter. The
+        # pixel id rides in the h3_r8 slot -- the kernel treats it as an opaque
+        # long either way.
+        pairs = sedona.sql(f"""
+            SELECT t.asr_id, p.pix AS h3_r8,
+                   ST_X(t.geom) AS tx_x, ST_Y(t.geom) AS tx_y, t.tx_height_m,
+                   ST_X(p.center) AS rx_x, ST_Y(p.center) AS rx_y
+            FROM tx t JOIN px p ON ST_DWithin(t.geom, p.center, {RADIUS_M})
+        """)
+        out = pairs.mapInPandas(links05.make_kernel(bcast),
+                                schema=links05.OUT_SCHEMA)
+        out.filter(f"rsrp_dbm >= {FLOOR}").createOrReplaceTempView("links")
+        # One pass, two surfaces: the current one simply ignores NEW: rows.
+        part = sedona.sql("""
+            SELECT h3_r8 AS pix,
+                   MAX(rsrp_dbm) AS rsrp_all,
+                   MAX(CASE WHEN asr_id NOT LIKE 'NEW:%' THEN rsrp_dbm END)
+                       AS rsrp_cur
+            FROM links GROUP BY h3_r8
+        """).toPandas()
+        parts.append(part)
+        print(f"  chunk {i + 1}/{n_chunks}: {len(chunk):,} pixels in, "
+              f"{len(part):,} served, {time.perf_counter() - t0:.0f}s elapsed")
+
+    agg = pd.concat(parts, ignore_index=True) if len(parts) > 1 else parts[0]
+    # Chunks partition the pixels, so a pixel cannot appear twice. Asserted
+    # rather than assumed: a duplicate here would silently take whichever row
+    # the burn wrote last instead of the true best server.
+    assert agg["pix"].is_unique, "chunks overlapped; a pixel was served twice"
     print(f"kernel + aggregation: {len(agg):,} pixels served in "
           f"{time.perf_counter() - t0:.0f}s")
 
