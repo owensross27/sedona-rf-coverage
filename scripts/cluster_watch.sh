@@ -27,7 +27,8 @@
 set -uo pipefail
 
 PENDING_MAX_MIN=${PENDING_MAX_MIN:-5}     # pod Pending longer than this is stuck
-IDLE_MAX_MIN=${IDLE_MAX_MIN:-10}          # nodes up, no job, longer than this is waste
+IDLE_MAX_MIN=${IDLE_MAX_MIN:-10}          # whole cluster idle longer than this is waste
+NODES_IDLE_MIN=${NODES_IDLE_MIN:-3}       # spot nodes up with no job; grace for stage boundaries
 AGE_WARN_HOURS=${AGE_WARN_HOURS:-3}       # cluster older than this, against a 4h timebox
 BOOTSTRAP_GRACE_MIN=${BOOTSTRAP_GRACE_MIN:-20}  # kube-system may be Pending this long after create
 CLUSTER=${CLUSTER:-rf-cov}
@@ -122,10 +123,29 @@ spark_nodes=$(( ${all_spark:-0} - ${draining:-0} ))
 active=$(kubectl get sparkapplication -A --no-headers 2>/dev/null \
          | grep -cE 'RUNNING|SUBMITTED|PENDING_RERUN' || true)
 [ "${draining:-0}" -gt 0 ] && say "$draining spot node(s) draining (scale-down in flight, still billing briefly)"
-if [ "${spark_nodes:-0}" -gt 0 ] && [ "${active:-0}" -eq 0 ]; then
-  flag "$spark_nodes schedulable spot node(s) with no active SparkApplication -- run 'make nodes-down'"
+
+# How long since the newest job finished. Both the node check below and the
+# idle check further down key on this, so it is resolved once.
+last_finish=$(kubectl get sparkapplication -A \
+  -o go-template='{{range .items}}{{if .status.terminationTime}}{{.status.terminationTime}}{{"\n"}}{{end}}{{end}}' 2>/dev/null | sort | tail -1)
+SINCE_JOB_MIN=-1
+if [ -n "$last_finish" ]; then
+  lf=$(date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$last_finish" +%s 2>/dev/null || date -u -d "$last_finish" +%s 2>/dev/null || echo 0)
+  if [ "$lf" -gt 0 ]; then SINCE_JOB_MIN=$(( ($(date -u +%s) - lf) / 60 ))
+  else flag "could not parse terminationTime ([$last_finish]) -- idle checks DID NOT RUN"; fi
+fi
+
+# GRACE BETWEEN CHAINED STAGES. This used to fire the instant a job completed,
+# which meant it alarmed on every stage boundary of a nine-stage pipeline -- the
+# gap while the next stage submits, or while a scale-up waits for nodes to go
+# Ready, is normal operation and not waste. Third cry-wolf case found in this
+# script; the pattern is always the same, a state that is transient by design
+# being reported as a standing fault.
+if [ "${spark_nodes:-0}" -gt 0 ] && [ "${active:-0}" -eq 0 ] \
+   && [ "$SINCE_JOB_MIN" -ge "$NODES_IDLE_MIN" ]; then
+  flag "$spark_nodes schedulable spot node(s), no active job for ${SINCE_JOB_MIN}m -- run 'make nodes-down'"
 else
-  say "schedulable spark nodes=$spark_nodes active jobs=$active"
+  say "schedulable spark nodes=$spark_nodes active jobs=$active (last job ${SINCE_JOB_MIN}m ago)"
 fi
 
 # AN IDLE CLUSTER WITH ZERO SPOT NODES IS STILL BILLING, and the check above
@@ -138,22 +158,8 @@ fi
 # newest SparkApplication having finished a while ago with nothing to replace
 # it -- which distinguishes a genuinely abandoned cluster from the minutes
 # between two stages of a pipeline.
-if [ "${active:-0}" -eq 0 ]; then
-  last_finish=$(kubectl get sparkapplication -A \
-    -o go-template='{{range .items}}{{if .status.terminationTime}}{{.status.terminationTime}}{{"\n"}}{{end}}{{end}}' 2>/dev/null | sort | tail -1)
-  if [ -n "$last_finish" ]; then
-    lf=$(date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$last_finish" +%s 2>/dev/null || date -u -d "$last_finish" +%s 2>/dev/null || echo 0)
-    if [ "$lf" -gt 0 ]; then
-      idle=$(( ($(date -u +%s) - lf) / 60 ))
-      if [ "$idle" -ge "$IDLE_MAX_MIN" ]; then
-        flag "cluster idle ${idle}m since the last job finished -- \$0.167/hr for nothing. 'make cluster-down'"
-      else
-        say "idle ${idle}m since last job (under ${IDLE_MAX_MIN}m)"
-      fi
-    else
-      flag "could not parse terminationTime ([$last_finish]) -- idle check DID NOT RUN"
-    fi
-  fi
+if [ "${active:-0}" -eq 0 ] && [ "$SINCE_JOB_MIN" -ge "$IDLE_MAX_MIN" ]; then
+  flag "cluster idle ${SINCE_JOB_MIN}m since the last job finished -- billing for nothing. 'make cluster-down'"
 fi
 
 # --- cluster age -------------------------------------------------------------
