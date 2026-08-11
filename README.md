@@ -30,10 +30,26 @@ through r8 on disjoint zoom bands) so the whole state draws without dropping a
 single cell, because a dropped cell on a choropleth is indistinguishable from
 an uncovered one. Switch between signal, coverage, population, tree cover and
 relief; filter by service band to see where the 257,018 people in gap cells
-actually are; and click any hexagon for why its signal is what it is: the
-serving tower and its height, distance, line of sight, tree cover, terrain
-relief, and building heights. One static PMTiles file served by GitHub Pages,
-no server anywhere.
+actually are; search 439 West Virginia places by name; and click any hexagon
+for why its signal is what it is: the serving tower and its height, distance,
+line of sight, tree cover, terrain relief, and building heights.
+
+**Click any structure and the map draws that transmitter's own propagation** —
+every cell it reaches down to -115 dBm, coloured by predicted RSRP from that
+transmitter alone, with the -105 dBm coverage contour dissolved from the cells
+that clear it. The contour comes back ragged, with holes and outlying islands,
+because that is what a 30 m DEM does to a 700 MHz signal in the Alleghenies;
+a smooth circle would be a different claim entirely. The panel gives the
+transmitter's reach in cells, in people, its line-of-sight share and median
+diffraction loss, and states the terms the number was built from. The
+recommended sites answer the same click, so "what would site #7 actually
+buy" is one click rather than a rerun.
+
+That is 2,990 transmitters and 1.2M transmitter-cell pairs. It is served as
+one 14.6 MB blob plus a byte-offset index, and a click fetches only that
+transmitter's slice with an HTTP Range request: a median 3.5 KB, worst case
+30 KB. The same mechanism `rf.pmtiles` already needed, so it asks nothing new
+of the host. Still one static directory on GitHub Pages, no server anywhere.
 
 ## Headline result
 
@@ -361,11 +377,30 @@ line-of-sight flag flips at the computed horizon.
 
 ```bash
 make setup   # uv venv, python 3.11, all 36 packages pinned by requirements.lock
-make test    # 49 correctness checks, no framework, no network
+make test    # 55 correctness checks, no framework, no network
 make bench   # throughput gate
 make demo    # one county end to end, local Spark, writes to ./data
+make web     # tiles, gazetteer and footprints -> web/data, then make web-serve
 make map     # the two figures above, from your own run's outputs
 ```
+
+`make all` is `pipeline` then `web`: nine Spark stages and then every file the
+map reads, from nothing to a map you can open. Statewide the compute moves to
+the cluster and the same three steps become:
+
+```bash
+make cluster-up nodes-up          # see the cost section before running this
+make cloud-pipeline SCOPE=state   # the same nine stages, one SparkApplication each
+make fetch SCOPE=state            # gold/ and silver/ back down from S3
+make web   SCOPE=state            # tiles + gazetteer + footprints -> web/data
+make cluster-down
+```
+
+The split is deliberate: the stages need Spark and may need a cluster, while
+everything under `web` is plain pandas and numpy specifically so the map can
+be rebuilt with the cluster already deleted. `fetch` is the bridge between the
+two halves, and it exists because pandas cannot read the `s3a://` paths the
+stages write.
 
 `make demo` needs one free credential: a Census API key
 (api.census.gov/data/key_signup.html) in a `.env` file as

@@ -57,3 +57,11 @@ web/data/*
 # The client reads meta.json for its caption AND its opening viewport, so
 # ignoring it shipped a statewide map that opened zoomed into one county.
 !web/data/meta.json
+# 13 KB gazetteer behind the search box. Committed because it IS the geocoder:
+# without it the box silently finds nothing.
+!web/data/places.json
+# Per-transmitter footprints: 14.6 MB read in ~4 KB Range slices, one per
+# clicked structure. Same deliberate exception as rf.pmtiles -- it is the data
+# the page serves, and there is no server here to serve it from.
+!web/data/footprints.bin
+!web/data/footprints.json

@@ -17,7 +17,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from config import REPO_ROOT  # noqa: E402
+from config import REPO_ROOT, scope  # noqa: E402
 from session import out_path  # noqa: E402
 
 OUT_DIR = REPO_ROOT / "web" / "data"
@@ -78,6 +78,13 @@ def main() -> int:
         meta[name] = [to_lnglat(minx, maxy), to_lnglat(maxx, maxy),
                       to_lnglat(maxx, miny), to_lnglat(minx, miny)]
         print(f"wrote {dest} {arr.shape}")
+    # Stamp the scope these surfaces were computed at. The client refuses to
+    # offer a surface mode when this disagrees with the tileset's scope: a
+    # demo-scope surface on a statewide map is a county-sized patch of colour
+    # floating in the middle of the state, captioned as the state's signal.
+    # `make surface` is ~30x more work statewide than at demo scope, so the
+    # two really can be out of step, and only this file knows which is which.
+    meta["scope"] = scope()["name"]
     (OUT_DIR / "surface_meta.json").write_text(json.dumps(meta))
     print(f"wrote {OUT_DIR / 'surface_meta.json'}")
     return 0

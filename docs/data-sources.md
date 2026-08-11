@@ -115,6 +115,15 @@ Shapefile only. **There is no public GeoParquet of TIGER block groups on S3 or
 Source Cooperative**, searched and not found. `03_census.py` converts, and
 publishing that conversion is a small genuine contribution.
 
+**TIGER/Line places**, `www2.census.gov/geo/tiger/TIGER2024/PLACE/tl_2024_54_place.zip`
+(1.6 MB), is the map's search box: 439 incorporated places and CDPs inside the
+tileset bounds, name and internal point only, shipped as a 13 KB JSON. An
+*internal* point rather than a centroid, because a centroid of a crescent-
+shaped city limit can land outside it. No geocoding service is involved and
+none is wanted: the box must only offer places the map actually has data for.
+The COUNTY file is national and 84 MB, so county names are deliberately not in
+it. US public domain.
+
 **Growth** is computed at **county** level only, from two ACS vintages. Block
 group boundaries were redrawn between the 2010 and 2020 censuses, so a
 GEOID-to-GEOID join across vintages is silently wrong, it produces plausible

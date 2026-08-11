@@ -248,6 +248,11 @@ sources:
     license: "US public domain"
   tiger:
     url_fmt: "https://www2.census.gov/geo/tiger/TIGER2024/BG/tl_2024_{fips}_bg.zip"
+    # Incorporated places and CDPs, for the map's search box. 1.6 MB for the
+    # state, and it carries INTPTLAT/INTPTLON per feature, so a gazetteer needs
+    # no geocoding service and no geometry work. The COUNTY file is national
+    # and 84 MB, so county names are deliberately not in the search box.
+    place_url_fmt: "https://www2.census.gov/geo/tiger/TIGER2024/PLACE/tl_2024_{fips}_place.zip"
     license: "US public domain"
   acs:
     # Requires a free key from https://api.census.gov/data/key_signup.html

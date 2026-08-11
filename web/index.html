@@ -7,6 +7,10 @@
 <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <script src="https://unpkg.com/pmtiles@3.2.1/dist/pmtiles.js"></script>
+<!-- Turns an H3 index back into a hexagon in the browser. The footprint blob
+     therefore ships cell IDS, not geometry: 12 bytes a cell instead of a
+     ~200-byte polygon, which is what keeps 1.2M of them to 14.6 MB. -->
+<script src="https://unpkg.com/h3-js@4.1.0/dist/h3-js.umd.js"></script>
 <style>
   html, body { margin: 0; height: 100%; font-family: -apple-system, system-ui, sans-serif; }
   #map { position: absolute; inset: 0; }
@@ -18,13 +22,24 @@
   #controls h1 { font-size: 14px; margin: 0 0 6px; }
   #controls label { display: block; margin: 2px 0; cursor: pointer; }
   #controls .note { color: #666; font-size: 11px; margin-top: 6px; }
+  #search { position: relative; margin: 6px 0 2px; }
+  #q { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px;
+       border: 1px solid #ccc; border-radius: 4px; padding: 4px 6px; }
+  #hits { list-style: none; margin: 2px 0 0; padding: 0; max-height: 168px;
+          overflow-y: auto; border: 1px solid #ddd; border-radius: 4px;
+          background: #fff; }
+  #hits:empty { display: none; border: none; }
+  #hits li { padding: 3px 6px; cursor: pointer; font-size: 12px; }
+  #hits li:hover, #hits li[aria-selected="true"] { background: #eef4ff; }
   #filters { margin-top: 8px; border-top: 1px solid #ddd; padding-top: 6px; }
   #filters .fhead { font-weight: 600; font-size: 11px; margin-bottom: 3px; }
   #filters .fhead a { font-weight: 400; color: #06c; text-decoration: none; }
   #filters label { font-size: 12px; }
   #filters .n { color: #666; }
-  #info { bottom: 24px; left: 10px; padding: 10px 12px; max-width: 300px; display: none; }
+  #info { bottom: 24px; left: 10px; padding: 10px 12px; max-width: 300px;
+          display: none; max-height: 62vh; overflow-y: auto; }
   #info h2 { font-size: 13px; margin: 0 0 4px; }
+  #info .sub { color: #666; font-size: 11px; margin-bottom: 4px; }
   #info td { padding: 1px 6px 1px 0; vertical-align: top; }
   #info .why { margin-top: 6px; padding-top: 6px; border-top: 1px solid #ddd; color: #444; }
   #legend { bottom: 24px; right: 10px; padding: 8px 12px; font-size: 11px; }
@@ -51,6 +66,12 @@
 
 <div id="controls" class="panel">
   <h1>West Virginia RF coverage</h1>
+  <div id="search">
+    <input id="q" type="search" autocomplete="off" spellcheck="false"
+           placeholder="Find a town..." aria-label="Find a town"
+           aria-controls="hits" hidden>
+    <ul id="hits" role="listbox" aria-label="Place matches"></ul>
+  </div>
   <div id="modes"></div>
   <label><input type="checkbox" id="towers-toggle" checked> ASR structures</label>
   <label><input type="checkbox" id="sites-toggle" checked> Recommended sites</label>
@@ -186,6 +207,17 @@ const LOD = [
 const DETAIL_ZOOM = 11;   // r8 (0.74 km2) and the full click panel from here up
 const HEX_LAYERS = [...LOD.map(l => l.id), "hexes"];
 
+// The four small descriptors (meta, surface_meta, places, footprints index)
+// are always revalidated. They DESCRIBE the big binaries -- scope, bounds,
+// thresholds, byte offsets -- and a cached descriptor paired with a rebuilt
+// binary is not a stale page, it is a confidently wrong one: offsets that
+// address the wrong transmitter, a caption from a different scope. Measured
+// here, not theorised: a rebuilt web/data left this page reading the previous
+// surface_meta.json, which silently disabled the scope check below.
+// Revalidation costs a 304 on four files of at most 94 KB; the 22.7 MB
+// tileset and the 14.6 MB blob still cache normally.
+const FRESH = { cache: "no-cache" };
+
 protocol = new pmtiles.Protocol();
 maplibregl.addProtocol("pmtiles", protocol.tile);
 
@@ -233,6 +265,30 @@ function buildOverlay() {
     paint: { "line-color": "#000", "line-width": 2 },
     filter: ["==", ["get", "h3"], ""],
   });
+  // The clicked transmitter's own coverage. Empty until something is clicked,
+  // and it sits ABOVE the choropleth (the two answer different questions and
+  // the footprint is the foreground one) but BELOW the markers, so the next
+  // transmitter stays clickable through it.
+  map.addSource("fp", { type: "geojson",
+                        data: { type: "FeatureCollection", features: [] } });
+  map.addLayer({
+    id: "fp-fill", type: "fill", source: "fp",
+    paint: { "fill-color": MODES.rsrp.paint, "fill-opacity": 0.75 },
+  });
+  // The coverage contour: the OUTER boundary of the served cells, dissolved
+  // by h3.cellsToMultiPolygon. Outlining each cell individually instead put a
+  // stroke on all 432 of them, which at the zoom a 40 km footprint fits on
+  // screen is a solid mat of line that hides the signal ramp underneath --
+  // the same failure the ASR markers had statewide. The shape stays ragged,
+  // and holes stay holes: that is what terrain does to a footprint, and a
+  // tidy circle would be a different claim entirely.
+  map.addSource("fp-edge", { type: "geojson",
+                             data: { type: "FeatureCollection", features: [] } });
+  map.addLayer({
+    id: "fp-edge", type: "line", source: "fp-edge",
+    paint: { "line-color": "#00e5ff", "line-width": 1.6, "line-opacity": 0.95 },
+  });
+
   map.addLayer({
     id: "towers", type: "circle", source: "rf", "source-layer": "towers",
     // Statewide there are 6,696 registered structures. Drawn at z4 they are a
@@ -278,10 +334,22 @@ function buildOverlay() {
 async function loadSurfaces() {
   let meta;
   try {
-    const r = await fetch("data/surface_meta.json");
+    const r = await fetch("data/surface_meta.json", FRESH);
     if (!r.ok) return;
     meta = await r.json();
   } catch { return; }
+  // A surface built at one scope on a tileset built at another is not a
+  // smaller version of the same map -- it is a county-sized patch of colour
+  // floating on a state, captioned as the state's signal surface. `make
+  // surface` is a ~100M-link job at demo scope and ~30x that statewide, so
+  // the two genuinely can be out of step, and the honest failure is to not
+  // offer the mode at all. make_overlays.py stamps the scope it ran at.
+  if (meta.scope && META.scope && meta.scope !== META.scope) {
+    console.warn(`per-pixel surfaces were built at scope "${meta.scope}" but `
+      + `the tiles are "${META.scope}" -- surface modes hidden. `
+      + `Rebuild with: make surface SCOPE=${META.scope}`);
+    return;
+  }
   const surfaces = {
     surf_cur: { key: "rsrp_surface_current",
                 label: "Signal surface (per-pixel, current towers)" },
@@ -311,7 +379,7 @@ async function loadSurfaces() {
 let META = {};
 async function loadMeta() {
   try {
-    const m = await (await fetch("data/meta.json")).json();
+    const m = await (await fetch("data/meta.json", FRESH)).json();
     META = m;
     if (!m.scope_desc) return;
     document.getElementById("note").innerHTML +=
@@ -333,8 +401,13 @@ async function loadMeta() {
 // while every asset it actually needs sits loaded and idle.
 map.on("style.load", () => {
   buildOverlay();
-  loadSurfaces();
-  loadMeta();
+  // loadSurfaces runs AFTER meta lands, not beside it: it compares its own
+  // scope against the tileset's, and racing that comparison against an empty
+  // META would let a mismatched surface through whenever the two fetches
+  // resolved in the wrong order -- intermittently, which is the worst way.
+  loadMeta().then(loadSurfaces);
+  loadPlaces();
+  loadFootprintIndex();
 
   const modes = document.getElementById("modes");
   Object.entries(MODES).forEach(([key, m], i) => {
@@ -381,19 +454,23 @@ map.on("style.load", () => {
     map.getCanvas().style.cursor = "";
     map.setFilter("hex-hover", ["==", ["get", "h3"], ""]);
   });
+  // Clicking a transmitter draws ITS OWN propagation, which is a different
+  // question from the choropleth's "how good is signal here" and the reason
+  // the footprint blob exists.
   map.on("click", "towers", e => {
     const p = e.features[0].properties;
-    new maplibregl.Popup().setLngLat(e.lngLat)
-      .setHTML(`<b>ASR ${p.asr}</b><br>${p.h ?? "?"} m ${p.type ?? "structure"}`)
-      .addTo(map);
+    showFootprint(String(p.asr), `ASR ${p.asr}`,
+                  `${p.h ?? "?"} m ${p.type ?? "structure"}, registered`);
   });
   map.on("click", "sites", e => {
     const p = e.features[0].properties;
-    new maplibregl.Popup().setLngLat(e.lngLat)
-      .setHTML(`<b>Recommended site #${p.rank}</b><br>${p.kind}, ${p.h} m mast` +
-               `<br>+${Number(p.gain).toLocaleString()} demand newly covered`)
-      .addTo(map);
+    showFootprint(`NEW:${p.rank}`, `Recommended site #${p.rank}`,
+                  `${p.kind}, ${p.h} m mast, not yet built`);
   });
+  for (const id of ["towers", "sites"]) {
+    map.on("mouseenter", id, () => map.getCanvas().style.cursor = "pointer");
+    map.on("mouseleave", id, () => map.getCanvas().style.cursor = "");
+  }
 });
 
 function setMode(key) {
@@ -406,11 +483,10 @@ function setMode(key) {
   // One ramp, every hex layer. Surface modes drop the fills to a nearly
   // invisible click target rather than hiding them, so the explainability
   // panel keeps working on top of the raster.
-  for (const id of HEX_LAYERS) {
-    if (!map.getLayer(id)) continue;
-    map.setPaintProperty(id, "fill-opacity", m.raster ? 0.04 : 0.62);
-    if (!m.raster) map.setPaintProperty(id, "fill-color", m.paint);
-  }
+  hexOpacity();
+  for (const id of HEX_LAYERS)
+    if (map.getLayer(id) && !m.raster)
+      map.setPaintProperty(id, "fill-color", m.paint);
   updateZoomUI();
 }
 
@@ -515,6 +591,236 @@ function buildFilters() {
   document.getElementById("fall").onclick = e => { e.preventDefault(); setAll(true); };
   document.getElementById("fnone").onclick = e => { e.preventDefault(); setAll(false); };
   applyFilters();
+}
+
+// ---- Per-transmitter propagation footprints --------------------------------
+// The choropleth answers "how good is signal HERE" -- one number per cell,
+// from whichever tower happens to serve it best. This answers the other half:
+// "how far does THAT transmitter reach, and what stops it".
+//
+// web/data/footprints.bin is every transmitter's reach concatenated, sorted by
+// transmitter, 12 bytes per cell. footprints.json holds the byte offset and
+// count for each one, so a click fetches ONE Range slice -- a median 292 cells
+// is 3.5 KB, the worst transmitter in the state is 30 KB. That is the same
+// serving trick rf.pmtiles already relies on, so it needs nothing from the
+// host that this page did not already need.
+//
+// Cell IDs travel, not geometry: h3-js rebuilds the hexagon locally. Shipping
+// polygons would be ~200 bytes a cell instead of 12.
+let FP = null;              // the index, once fetched
+let FP_ACTIVE = null;       // which transmitter is drawn
+
+async function loadFootprintIndex() {
+  try {
+    const r = await fetch("data/footprints.json", FRESH);
+    if (r.ok) FP = await r.json();
+  } catch { /* clicking a tower then just does nothing extra */ }
+}
+
+// Deliberately NOT a single big fetch of the blob: 14.6 MB on page load to
+// serve a click that may never come is the whole reason the index exists.
+async function fetchSlice(off, n) {
+  const bytes = n * FP.record_bytes;
+  const r = await fetch("data/footprints.bin", {
+    headers: { Range: `bytes=${off}-${off + bytes - 1}` },
+  });
+  if (!r.ok) throw new Error(`footprint fetch ${r.status}`);
+  const buf = await r.arrayBuffer();
+  // A host that ignores Range answers 200 with the WHOLE file, and slicing
+  // from 0 would then draw the alphabetically-first transmitter's coverage
+  // under this one's name -- a wrong map that looks entirely plausible.
+  const base = r.status === 206 ? 0 : off;
+  if (buf.byteLength < base + bytes) throw new Error("short footprint read");
+  return new DataView(buf, base, bytes);
+}
+
+function decodeFootprint(view, n) {
+  const feats = [], served = [];
+  const threshold = FP.threshold_dbm;
+  for (let i = 0; i < n; i++) {
+    const o = i * FP.record_bytes;
+    const cell = view.getBigUint64(o, true).toString(16);
+    const rsrp = view.getInt8(o + 8);
+    if (rsrp >= threshold) served.push(cell);
+    feats.push({
+      type: "Feature",
+      geometry: { type: "Polygon",
+                  coordinates: [h3.cellToBoundary(cell, true)] },
+      properties: { rsrp, diff: view.getUint8(o + 9),
+                    clut: view.getUint8(o + 10), los: view.getUint8(o + 11) },
+    });
+  }
+  // The dissolved coverage contour. cellsToMultiPolygon walks the cell set's
+  // shared edges, so islands come back as separate rings and terrain shadows
+  // inside the footprint come back as holes -- both of which are the point.
+  const edge = { type: "Feature", properties: {},
+                 geometry: { type: "MultiPolygon",
+                             coordinates: h3.cellsToMultiPolygon(served, true) } };
+  return [{ type: "FeatureCollection", features: feats }, edge];
+}
+
+async function showFootprint(txId, title, subtitle) {
+  const el = document.getElementById("info");
+  if (!FP || !FP.tx[txId]) {
+    el.innerHTML = `<h2>${title}</h2><div class="why">${subtitle}.<br>
+      No footprint shipped for this structure: it reaches no modelled cell
+      above ${FP ? FP.floor_dbm : -115} dBm.</div>`;
+    el.style.display = "block";
+    return;
+  }
+  const [off, n, served, pop] = FP.tx[txId];
+  el.innerHTML = `<h2>${title}</h2><div class="why">Loading footprint...</div>`;
+  el.style.display = "block";
+
+  let fc, edge;
+  try {
+    [fc, edge] = decodeFootprint(await fetchSlice(off, n), n);
+  } catch (err) {
+    el.innerHTML = `<h2>${title}</h2><div class="why">${err.message}</div>`;
+    return;
+  }
+  FP_ACTIVE = txId;
+  map.getSource("fp").setData(fc);
+  map.getSource("fp-edge").setData(edge);
+  hexOpacity();
+  // Frame it. A 40 km footprint clicked from z13 is otherwise three hexagons
+  // filling the screen with no way to tell anything happened, and clicked
+  // from z9 it runs off two edges. The map moving is the answer to the
+  // question that was just asked.
+  const b = new maplibregl.LngLatBounds();
+  for (const f of fc.features)
+    for (const c of f.geometry.coordinates[0]) b.extend(c);
+  map.fitBounds(b, { padding: 60, maxZoom: 11, duration: 500 });
+
+  const p = fc.features.map(f => f.properties);
+  const los = p.filter(f => f.los).length;
+  const diff = p.map(f => f.diff).sort((a, b) => a - b);
+  const rows = [
+    ["Cells reached", `${n.toLocaleString()} (to ${FP.floor_dbm} dBm)`],
+    ["Above threshold", `${served.toLocaleString()} cells `
+       + `(${(100 * served / n).toFixed(0)}%)`],
+    ["People served", pop.toLocaleString()],
+    ["Strongest cell", `${Math.max(...p.map(f => f.rsrp))} dBm`],
+    ["Line of sight", `${(100 * los / n).toFixed(0)}% of reached cells`],
+    ["Median diffraction", `${diff[diff.length >> 1]} dB`],
+  ];
+  el.innerHTML = `<h2>${title}</h2>
+    <div class="sub">${subtitle}</div>
+    <table>${rows.map(([k, v]) =>
+      `<tr><td>${k}</td><td><b>${v}</b></td></tr>`).join("")}</table>
+    <div class="why">${budgetText()}
+      <a href="https://github.com/owensross27/sedona-rf-coverage/blob/main/docs/link-budget.md"
+         target="_blank" rel="noopener">Full link budget</a> ·
+      <a href="#" id="fpclear">clear footprint</a></div>`;
+  document.getElementById("fpclear").onclick = e => {
+    e.preventDefault();
+    clearFootprint();
+    el.style.display = "none";
+  };
+}
+
+// The "how was this computed" text, built from meta.json rather than typed
+// here, so it cannot describe a different model from the one that drew the
+// map. Every term below is a term the kernel actually subtracts.
+function budgetText() {
+  const rf = META.rf || {};
+  return `<b>How this is computed.</b> ${rf.eirp_dbm} dBm EIRP spread over `
+    + `${rf.subcarriers} subcarriers, minus free-space loss at `
+    + `${META.frequency_mhz} MHz, minus terrain diffraction (Deygout, up to `
+    + `three knife edges over a ${rf.profile_samples}-sample elevation profile `
+    + `from a 30 m DEM, k=${rf.k_factor} earth), minus clutter at the receiver `
+    + `(land-cover class, or a knife edge over the mapped building height, `
+    + `whichever is larger), minus a ${rf.shadow_margin_db} dB shadow-fading `
+    + `margin, to a ${rf.rx_height_m} m receiver. Cut off at `
+    + `${rf.max_link_km} km. `;
+}
+
+function clearFootprint() {
+  FP_ACTIVE = null;
+  const empty = { type: "FeatureCollection", features: [] };
+  map.getSource("fp").setData(empty);
+  map.getSource("fp-edge").setData(empty);
+  hexOpacity();
+}
+
+// One place decides how solid the choropleth is, because three things now
+// want it out of the way: a raster surface under it, a footprint over it, and
+// neither. Two of those used to be set independently and the second one to
+// run won.
+function hexOpacity() {
+  const o = MODES[CURRENT_MODE].raster ? 0.04 : FP_ACTIVE ? 0.10 : 0.62;
+  for (const id of HEX_LAYERS)
+    if (map.getLayer(id)) map.setPaintProperty(id, "fill-opacity", o);
+}
+
+// ---- Place search ----------------------------------------------------------
+// A local gazetteer, not a geocoder. web/data/places.json is 439 TIGER places
+// in 13 KB, written by make_web_data.py from the same run that wrote the
+// tiles, so the box can only offer somewhere the map actually has data for.
+// Filtering 439 strings on every keystroke is microseconds; a search index
+// here would be more code than the data.
+//
+// The box stays HIDDEN until the fetch lands. A search input that silently
+// matches nothing because its data 404'd is worse than no search input, and
+// this file is deliberately deployable without the pipeline having run.
+let PLACES = [];
+async function loadPlaces() {
+  try {
+    const r = await fetch("data/places.json", FRESH);
+    if (!r.ok) return;
+    PLACES = await r.json();
+  } catch { return; }
+  if (!PLACES.length) return;
+
+  const q = document.getElementById("q");
+  const hits = document.getElementById("hits");
+  q.hidden = false;
+  let sel = -1;
+
+  const render = () => {
+    const s = q.value.trim().toLowerCase();
+    // Prefix matches first, then the SHORTEST name. A plain substring filter
+    // in TIGER's alphabetical order answers "char" with Charlton Heights and
+    // buries Charleston under it. Length is a stand-in for prominence --
+    // TIGER PLACE carries no population field, and the less-qualified name is
+    // the one a short query usually means.
+    const rank = p => p[0].toLowerCase().startsWith(s) ? 0 : 1;
+    const m = s ? PLACES.filter(p => p[0].toLowerCase().includes(s))
+                        .sort((a, b) => rank(a) - rank(b)
+                                        || a[0].length - b[0].length)
+                        .slice(0, 8)
+                : [];
+    sel = -1;
+    hits.innerHTML = m.map((p, i) =>
+      `<li role="option" data-i="${i}">${p[0]}</li>`).join("");
+    hits._m = m;
+  };
+  const go = i => {
+    const p = (hits._m || [])[i];
+    if (!p) return;
+    // Past DETAIL_ZOOM on purpose: someone searching a town wants the r8
+    // cells and the click panel, not the rolled-up hexagon it sits in.
+    map.flyTo({ center: [p[2], p[1]], zoom: DETAIL_ZOOM + 1 });
+    q.value = p[0];
+    hits.innerHTML = "";
+  };
+
+  q.addEventListener("input", render);
+  hits.addEventListener("click", e => {
+    if (e.target.dataset.i !== undefined) go(Number(e.target.dataset.i));
+  });
+  q.addEventListener("keydown", e => {
+    const n = hits.children.length;
+    if (e.key === "Enter") { go(sel < 0 ? 0 : sel); e.preventDefault(); return; }
+    if (e.key === "Escape") { hits.innerHTML = ""; return; }
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    e.preventDefault();
+    if (!n) return;
+    // From nothing selected, Down picks the first and Up picks the last.
+    sel = e.key === "ArrowDown" ? (sel + 1) % n : (sel <= 0 ? n : sel) - 1;
+    [...hits.children].forEach((li, i) =>
+      li.setAttribute("aria-selected", i === sel));
+  });
 }
 
 // ---- Ask panel -------------------------------------------------------------

@@ -84,3 +84,38 @@ Consistency between the two, measured not assumed: the median WV building
 - Interference margin: this is a coverage model, not a capacity model.
 - Building penetration loss: outdoor coverage at 1.5 m.
 - Body loss, feeder loss: absorbed into the conventional EIRP figure.
+
+## Per-transmitter footprints
+
+The interactive map draws one transmitter's own coverage when you click it.
+That is the same `link_rsrp` evaluation as everything else, read back per
+transmitter instead of per receiver cell: the pipeline already computes every
+transmitter/cell pair inside `max_link_km` in stage 05, keeps the budget
+decomposed (free-space, diffraction, clutter, distance, geometric line of
+sight), and writes it to `silver/links`. `scripts/make_footprints.py`
+repackages that table; it models nothing new.
+
+The one exception is the optimizer's recommended sites. They are not
+registered structures, so no link row exists for them, and their footprints
+are computed in that script by calling the same kernel directly against the
+same terrain grid.
+
+Two properties of what is drawn are worth stating plainly, because both are
+choices rather than physics:
+
+- **Truncated at -115 dBm**, 10 dB below the coverage threshold. Statewide
+  there are 2.29M links above the model's -125 dBm floor and 1.20M above
+  -115; the tail nearly doubles the file and contains nothing a reader can
+  act on. The edge of a footprint is therefore the edge of a contour, not the
+  edge of the physics.
+- **The coverage contour is dissolved from the served cells**, so it inherits
+  the H3 r8 cell shape (0.74 km2, about 930 m across) and comes back with
+  holes and outlying islands. Those are terrain shadows and isolated ridge
+  tops that clear the threshold, and they are the honest shape. Site #1's
+  footprint dissolves into 72 separate polygons, the largest with 11 holes.
+
+The per-pixel surfaces (`make surface`) are the higher-resolution view of the
+same kernel at 90 m, for the combined best server rather than one transmitter.
+The map offers them only when they were built at the same scope as the tiles:
+a county-scope surface draped over a statewide tileset is a patch of colour
+floating in the middle of the state, captioned as the state's signal.

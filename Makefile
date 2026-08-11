@@ -10,7 +10,15 @@ ECR_REPO       ?= sedona-rf-coverage
 IMAGE_TAG      ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 ECR_IMAGE       = $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(ECR_REPO):$(IMAGE_TAG)
 
-.PHONY: setup test bench smoke demo pipeline dq ookla surface map tiles web-serve image push preflight \
+# Every stage and every publishing script resolves its paths through this (see
+# config.py). Exported rather than passed per-target so `make fetch` writes
+# exactly where `make web` then reads -- the two halves of an end-to-end run
+# disagreeing about a directory is a silent way to publish stale data.
+RFC_DATA_DIR ?= data
+export RFC_DATA_DIR
+
+.PHONY: setup test bench smoke demo pipeline cloud-pipeline all dq ookla surface map \
+        tiles footprints web fetch web-serve image push preflight \
         spot-check cluster-up cluster-down nodes-up nodes-down spike job events-prefix \
         history history-stop \
         status check-nat watch watch-loop destroy-all clean
@@ -36,6 +44,11 @@ test:
 	$(VENV)/python tests/test_bronze.py
 	$(VENV)/python tests/test_coverage.py
 	$(VENV)/python tests/test_siting.py
+	# The footprint blob is addressed by byte offset, so a one-byte slip in the
+	# record layout paints one transmitter's coverage under another's name --
+	# a wrong map that looks entirely plausible. Pure numpy, no data needed.
+	$(VENV)/python -c "import sys; sys.path.insert(0,'scripts'); \
+	  import make_footprints as f; f.self_check()"
 	# The reaper decides whether to delete a Kubernetes cluster, so its two
 	# gates are worth a gate of their own. Pure stdlib, no boto3, no network:
 	# boto3 is imported inside the handler precisely so this stays runnable.
@@ -60,6 +73,31 @@ pipeline:
 	for s in 01_towers 02_terrain 03_census 04_grid 05_links 06_coverage 07_dq 08_features 09_siting; do \
 	  echo "== $$s"; SCOPE=$(SCOPE) $(VENV)/python src/$$s.py; \
 	done
+
+# The same nine stages, submitted to the cluster instead of run locally. One
+# SparkApplication per stage, in order, stopping at the first failure -- `job`
+# polls to a terminal state and exits non-zero on FAILED, which is what makes
+# a loop like this safe to leave running.
+#
+# 01-03 are driver-heavy (a download, a warp, an API pull) and get one
+# executor; the rest get the full three. Sizing them all alike either idles
+# two spot nodes through three stages or starves the join in 05.
+#
+# NOT chained onto cluster-up/cluster-down: teardown belongs to `spike`, which
+# holds a trap, and burying a cluster delete inside a pipeline target means a
+# Ctrl-C at the wrong moment leaves one billing.
+cloud-pipeline:
+	@for s in 01 02 03 04 05 06 07 08 09; do \
+	   case $$s in 01|02|03) e=1;; *) e=3;; esac; \
+	   $(MAKE) job STAGE=$$s SCOPE=$(SCOPE) EXECUTORS=$$e || exit 1; \
+	 done
+	@echo "== all nine stages COMPLETED. Next: make fetch && make web"
+
+# End to end, locally, from nothing to a map you can open: nine Spark stages
+# into ./data, then every file web/data holds. `make demo` is this at one-county
+# scope. Statewide, `pipeline` is the part that wants the cluster --
+# cloud-pipeline + fetch + web is the same three steps with the compute moved.
+all: pipeline web
 
 dq:
 	source scripts/java_env.sh && SCOPE=$(SCOPE) $(VENV)/python src/07_dq.py
@@ -95,6 +133,43 @@ map:
 
 tiles:
 	bash scripts/make_tiles.sh
+
+# Per-transmitter propagation footprints: click one structure, see its own
+# coverage. A repackaging of silver/links (plus the recommended sites, which
+# have no link rows and are run through the same kernel here), into one blob
+# the page reads with HTTP Range requests.
+footprints:
+	SCOPE=$(SCOPE) LOCAL_OUT=$${LOCAL_OUT:-1} $(VENV)/python scripts/make_footprints.py
+
+# EVERYTHING web/data holds, from whatever gold/ the current scope points at.
+# This is the second half of an end-to-end run: `pipeline` (or `cloud-pipeline`)
+# computes, `web` publishes. Kept as one target because the map reads five
+# files that must all describe the same run -- tiles built from one scope with
+# a meta.json from another is precisely the drift that put "Demo scope:
+# Kanawha County" on a statewide map.
+web: tiles footprints
+
+# S3 -> the local data dir, so the publishing half can run with the cluster
+# already deleted. The stages write to s3a:// from the cluster; make_web_data
+# and make_footprints are plain pandas by design (they must outlive the
+# cluster), and pandas cannot read s3a://. This is the bridge, and before it
+# existed the bridge was an aws s3 sync somebody had to remember.
+#
+# Silenced: the recipe line would print the bucket name. See `job`.
+fetch:
+	@test -n "$(RF_BUCKET)" || { echo "RF_BUCKET is unset"; exit 1; }
+	@# Exactly what make_web_data.py and make_footprints.py read. Keep this
+	@# list honest with:
+	@#   grep -ho 'out_path("[a-z]*", *"[a-z_0-9.]*"' scripts/make_web_data.py \
+	@#     scripts/make_footprints.py | sort -u
+	@for p in bronze/towers silver/links silver/hex_features \
+	          gold/coverage gold/siting; do \
+	   echo "== fetching $$p"; \
+	   aws s3 sync "s3://$(RF_BUCKET)/$$p/" "$(RFC_DATA_DIR)/$$p/" --quiet; \
+	 done
+	@echo "== fetching cog"
+	@aws s3 sync "s3://$(RF_BUCKET)/cog/" "$(RFC_DATA_DIR)/cog/" --quiet
+	@du -sh $(RFC_DATA_DIR)
 
 # PMTiles needs HTTP range requests, which python -m http.server does not do.
 web-serve:

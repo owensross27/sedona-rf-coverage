@@ -30,7 +30,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from config import REPO_ROOT, RF, scope  # noqa: E402
+from config import REPO_ROOT, RF, SOURCES, STATE, scope  # noqa: E402
 from session import out_path  # noqa: E402
 
 OUT_DIR = REPO_ROOT / "web" / "data"
@@ -375,12 +375,50 @@ def site_layer() -> int:
     return len(s)
 
 
+def gazetteer(bounds) -> int:
+    """Place names -> web/data/places.json, the map's search box.
+
+    No geocoding service, no API key, no network call at page load. TIGER's
+    PLACE file already carries INTPTLAT/INTPTLON per feature -- an *internal*
+    point, guaranteed to fall inside the polygon, unlike a centroid, which for
+    a crescent-shaped city limit can land outside it -- so this reads the
+    attributes and throws the shapes away. The whole state is a few hundred
+    names, small enough that the client filters the array directly and no
+    search index is warranted.
+
+    Filtered to the tileset's own bounds so a demo-scope map cannot offer to
+    fly somewhere it has no data for. That filter doubles as the check on
+    coordinate order: INTPTLAT/INTPTLON are strings ("+38.3498000"), and if
+    they were read the wrong way round every point would fall outside the
+    state and this would emit zero -- which the assert below refuses.
+    """
+    import geopandas as gpd
+
+    from sources import cached
+
+    path = cached(SOURCES["tiger"]["place_url_fmt"].format(fips=STATE["fips"]))
+    p = gpd.read_file(f"/vsizip/{path}", columns=["NAME", "INTPTLAT", "INTPTLON"])
+    lat = p["INTPTLAT"].astype(float)
+    lng = p["INTPTLON"].astype(float)
+    minx, miny, maxx, maxy = bounds
+    keep = lng.between(minx, maxx) & lat.between(miny, maxy)
+    places = sorted(
+        ([n, round(y, 4), round(x, 4)]
+         for n, y, x in zip(p.loc[keep, "NAME"], lat[keep], lng[keep])),
+        key=lambda r: r[0])
+    assert places, ("no TIGER place fell inside the tileset bounds -- check "
+                    "INTPTLAT/INTPTLON were not read transposed")
+    (OUT_DIR / "places.json").write_text(json.dumps(places, separators=(",", ":")))
+    return len(places)
+
+
 def main() -> int:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     sc = scope()
     df = hex_layer()
     lod = lod_layers(df)
     n_tow, n_site = tower_layer(), site_layer()
+    n_place = gazetteer(df.attrs["bounds"])
     # The client reads scope and cell count rather than hardcoding them: the
     # page said "Demo scope: Kanawha County" for as long as it took someone to
     # notice, which on a statewide build is simply false. A caption that
@@ -395,6 +433,14 @@ def main() -> int:
             "scope_desc": sc["description"],
             "n_hexes": len(df),
             "bounds": df.attrs["bounds"],
+            # The pre-registered kernel parameters, carried so the page can
+            # show the link budget it is actually drawing rather than a set of
+            # numbers typed into HTML months earlier. config.yml is the one
+            # place they are allowed to be authored.
+            "rf": {k: RF[k] for k in (
+                "eirp_dbm", "subcarriers", "rx_height_m", "shadow_margin_db",
+                "k_factor", "profile_samples", "max_link_km",
+                "default_tx_height_m")},
             # Headline aggregates, computed here rather than typed into the
             # page. The ask-panel sends these as context, and a hardcoded
             # summary would start lying the first time the pipeline is re-run
@@ -404,7 +450,7 @@ def main() -> int:
     (OUT_DIR / "meta.json").write_text(json.dumps(meta))
     rollup = "  ".join(f"{k}={v}" for k, v in lod.items())
     print(f"wrote {len(df)} hexes ({rollup}), {n_tow} towers, "
-          f"{n_site} sites -> {OUT_DIR}")
+          f"{n_site} sites, {n_place} places -> {OUT_DIR}")
 
     # Cell and population conservation are asserted per level inside
     # lod_layers; this only catches a resolution listed out of order in LOD.
