@@ -1,3 +1,9 @@
+# DIRECT dependencies and why each one is here. Nothing installs from this file
+# any more: `make setup` and the Dockerfile both read requirements.lock, which
+# pins this set plus its transitive closure to the exact versions the published
+# results were produced with. Edit here, then regenerate the lock -- the header
+# of that file has the command.
+#
 # Install order matters: pyspark FIRST, pinned, then sedona WITHOUT extras.
 # apache-sedona[spark] resolves pyspark 4.x / Scala 2.13 and breaks every 2.12
 # jar pinned in src/session.py and docker/Dockerfile.

@@ -19,7 +19,7 @@ ECR_IMAGE       = $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(ECR_RE
 setup:
 	uv venv --python 3.11 .venv
 	uv pip install -p .venv "pyspark==3.5.3"
-	uv pip install -p .venv -r requirements.txt
+	uv pip install -p .venv -r requirements.lock
 	@$(VENV)/python -c "import pyspark; assert pyspark.__version__=='3.5.3'; print('stack ok')"
 
 # The correctness gate. Runs without pytest so a cold clone needs no framework,

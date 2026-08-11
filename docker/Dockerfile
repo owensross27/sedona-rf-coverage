@@ -74,8 +74,15 @@ RUN cd "${SPARK_HOME:?SPARK_HOME unset}/jars" \
 # PYTHONPATH ahead of site-packages, so a pip-installed pyspark would never be
 # imported -- just a dead ~450 MB and a version mismatch against
 # assert_versions(). requirements.txt pins it for the local venv only.
-COPY requirements.txt /opt/rfc/requirements.txt
-RUN grep -v '^pyspark' /opt/rfc/requirements.txt > /opt/rfc/requirements-image.txt \
+#
+# Installs from requirements.lock, not requirements.txt. pip here is 22.0.2 and
+# numpy, rasterio and scipy have all dropped cp311 wheels in their newest
+# releases -- against floors rather than pins, this layer does not fail
+# cleanly, it backtracks hunting for a version that builds from source. Pinned,
+# every package resolves to a prebuilt cp311 aarch64 wheel and there is no
+# compiler step at all.
+COPY requirements.lock /opt/rfc/requirements.lock
+RUN grep -v '^pyspark' /opt/rfc/requirements.lock > /opt/rfc/requirements-image.txt \
     && python3.11 -m pip install --no-cache-dir -r /opt/rfc/requirements-image.txt
 
 # Code last so a source edit does not invalidate the jar and dependency layers

@@ -325,8 +325,8 @@ line-of-sight flag flips at the computed horizon.
 ## Reproduce it
 
 ```bash
-make setup   # uv venv, python 3.11, pinned pyspark 3.5.3 + sedona 1.9.1
-make test    # 40 correctness checks, no framework, no network
+make setup   # uv venv, python 3.11, all 36 packages pinned by requirements.lock
+make test    # 49 correctness checks, no framework, no network
 make bench   # throughput gate
 make demo    # one county end to end, local Spark, writes to ./data
 make map     # the two figures above, from your own run's outputs
@@ -337,6 +337,14 @@ make map     # the two figures above, from your own run's outputs
 `CENSUS_API_KEY=...`. Everything else reads anonymous open S3 buckets.
 **No AWS account, no cloud spend.** If `make demo` stops working, the repo is
 not reproducible and that is a bug.
+
+Dependencies are pinned rather than floored, and that is load-bearing rather
+than tidy. With `>=` floors every install resolved whatever was newest that
+day: `pyarrow` moved 25.0.0 to 25.0.1 within a day of the run that produced the
+numbers above. [`requirements.lock`](requirements.lock) pins all 36 packages,
+direct and transitive, to the set those results came from.
+[`requirements.txt`](requirements.txt) remains the readable list of direct
+dependencies and the reason for each.
 
 The cloud tier is opt-in and needs `RF_BUCKET` and `AWS_ACCOUNT_ID` exported;
 no account identifier appears anywhere in this repository.
