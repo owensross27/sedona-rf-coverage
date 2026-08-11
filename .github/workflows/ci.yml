@@ -20,7 +20,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: setup
         run: make setup
-      - name: correctness gate (40 offline checks)
+      - name: correctness gate (49 offline checks)
         run: make test
       - name: throughput gate (>= 100k pairs/min/core)
         run: make bench
