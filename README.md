@@ -187,7 +187,7 @@ flowchart LR
     end
     browser["Browser: MapLibre +<br/>PMTiles, no server"]
     open --> spark
-    spark --> tiles["tippecanoe -> rf.pmtiles (3.4 MB)"]
+    spark --> tiles["tippecanoe -> rf.pmtiles<br/>(0.6 MB demo, 12.3 MB statewide)"]
     tiles --> repo
     repo --> ci
     repo --> pages

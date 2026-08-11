@@ -21,7 +21,11 @@ DQ = CFG["dq"]
 VALIDATION = CFG["validation"]
 SOURCES = CFG["sources"]
 
-DATA_DIR = REPO_ROOT / "data"
+# Overridable so two scopes can sit on disk at once. `make demo` writes the
+# county-scope outputs the published tiles are built from; pulling the statewide
+# gold down for a tile-size measurement would otherwise overwrite them, and the
+# only way back is a 15-minute pipeline re-run. Same pattern as RFC_CONFIG above.
+DATA_DIR = Path(os.environ.get("RFC_DATA_DIR", REPO_ROOT / "data"))
 
 
 def scope(name: str | None = None) -> dict:

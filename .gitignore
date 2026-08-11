@@ -54,3 +54,6 @@ web/data/*
 !web/data/rf.pmtiles
 !web/data/rsrp_surface_*.png
 !web/data/surface_meta.json
+# The client reads meta.json for its caption AND its opening viewport, so
+# ignoring it shipped a statewide map that opened zoomed into one county.
+!web/data/meta.json
