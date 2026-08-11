@@ -100,6 +100,23 @@ spec:
       # supplies both the pruning and the coordinate), so this is config only.
       - name: HOME
         value: /tmp
+      # GDAL cannot create a TILED tiff directly on /vsis3/. A COG is written
+      # with random access (w+b), and object storage has no such thing, so
+      # 02_terrain died writing its first statewide COG:
+      #   w+b not supported for /vsis3/, unless
+      #   CPL_VSIL_USE_TEMP_FILE_FOR_RANDOM_WRITE is set to YES
+      # With this set, GDAL stages the file on local disk and PUTs it on close.
+      # Another failure that cannot happen locally, where LOCAL_OUT=1 writes to
+      # a real filesystem -- the same shape as the HOME bug above, and the
+      # reason the cluster run had to happen before the pipeline was trusted.
+      #
+      # The staging area is /tmp (see CPL_TMPDIR), which is the emptyDir-backed
+      # node disk, not the container's writable layer. Statewide COGs here are
+      # tens of MB, so this is comfortable.
+      - name: CPL_VSIL_USE_TEMP_FILE_FOR_RANDOM_WRITE
+        value: "YES"
+      - name: CPL_TMPDIR
+        value: /tmp
       # Stage 03 alone needs this, and a keyless request does not error: the
       # Census API returns HTTP 200 with a redirect to missing_key.html. It
       # comes from a Secret created by `make cluster-up` so it stays out of a
