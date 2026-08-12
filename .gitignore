@@ -46,13 +46,24 @@ __pycache__/
 *.zip
 *.parquet
 *.gpkg
-!web/*.pmtiles
+!web/*.pmtiles.png
 # The tiles ship in the repo ON PURPOSE: GitHub Pages serves the interactive
 # map from them with zero infrastructure, and the public map has to keep
 # working after the cluster is deleted. The committed rf.pmtiles is STATE
 # scope, 22.7 MB, rebuilt by `make tiles SCOPE=state`.
 web/data/*
-!web/data/rf.pmtiles
+# ⚠️ THE `.png` SUFFIX IS LOAD-BEARING AND THE FILES ARE NOT IMAGES.
+# GitHub Pages sets Content-Type from the extension, and it gzips
+# application/octet-stream -- then answers a byte RANGE against the COMPRESSED
+# stream. Measured: a 207,200-byte probe came back as `content-range:
+# bytes 0-1023/555`. Every offset in a PMTiles archive or the footprint index
+# is an offset into the UNCOMPRESSED file, so the whole serving model breaks,
+# and it breaks INTERMITTENTLY because `vary: Accept-Encoding` means curl (no
+# Accept-Encoding) gets a correct 206 while every real browser gets the
+# compressed one. Probed across extensions: .pmtiles/.bin/.dat/.wasm are
+# gzipped; .png/.gz/.woff2/.mp4/.webp are served identity. Pages does not let
+# you set headers, so the extension is the only control available.
+!web/data/rf.pmtiles.png
 !web/data/rsrp_surface_*.png
 !web/data/surface_meta.json
 # The client reads meta.json for its caption AND its opening viewport, so
@@ -64,8 +75,5 @@ web/data/*
 # Per-transmitter footprints: 14.6 MB read in ~4 KB Range slices, one per
 # clicked structure. Same deliberate exception as rf.pmtiles -- it is the data
 # the page serves, and there is no server here to serve it from.
-!web/data/footprints.bin
+!web/data/footprints.bin.png
 !web/data/footprints.json
-# Temporary: content-type probe for the GitHub Pages gzip/Range problem.
-# Removed once the answer is recorded in docs/.
-!web/_probe/

@@ -255,9 +255,20 @@ map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: "imperial" }),
 function buildOverlay() {
   // Absolute URL from the page's own origin: a RELATIVE pmtiles:// URL also
   // fails silently. Origin-relative keeps the file deployable to any host.
+  // ⚠️ THE `.png` SUFFIX IS LOAD-BEARING. THIS FILE IS NOT AN IMAGE.
+  // GitHub Pages sets Content-Type from the extension and gzips
+  // application/octet-stream -- then answers a byte RANGE against the
+  // COMPRESSED stream. Measured on a 207,200-byte probe: `content-range:
+  // bytes 0-1023/555`. Every offset in a PMTiles archive is an offset into the
+  // UNCOMPRESSED file, so this breaks the entire serving model, and it breaks
+  // INTERMITTENTLY: `vary: Accept-Encoding` means curl gets a correct 206
+  // while every real browser gets the compressed one, which is why it survived
+  // a round of verification that used curl. Probed: .pmtiles/.bin/.dat/.wasm
+  // are gzipped; .png/.gz/.woff2/.mp4/.webp are served identity. Pages does
+  // not let you set response headers, so the extension is the only control.
   map.addSource("rf", {
     type: "vector",
-    url: "pmtiles://" + new URL("data/rf.pmtiles", location.href).href,
+    url: "pmtiles://" + new URL("data/rf.pmtiles.png", location.href).href,
   });
 
   // Coarse first so the r8 layer sits on top; they never coexist at a given
@@ -660,8 +671,10 @@ function buildFilters() {
 // transmitter, 12 bytes per cell. footprints.json holds the byte offset and
 // count for each one, so a click fetches ONE Range slice -- a median 292 cells
 // is 3.5 KB, the worst transmitter in the state is 30 KB. That is the same
-// serving trick rf.pmtiles already relies on, so it needs nothing from the
-// host that this page did not already need.
+// serving trick rf.pmtiles.png already relies on, so it needs nothing from
+// the host that this page did not already need -- including the `.png` suffix,
+// which is what stops GitHub Pages gzipping it and range-serving the
+// compressed bytes. See the comment on the rf source above.
 //
 // Cell IDs travel, not geometry: h3-js rebuilds the hexagon locally. Shipping
 // polygons would be ~200 bytes a cell instead of 12.
@@ -679,7 +692,7 @@ async function loadFootprintIndex() {
 // serve a click that may never come is the whole reason the index exists.
 async function fetchSlice(off, n) {
   const bytes = n * FP.record_bytes;
-  const r = await fetch("data/footprints.bin", {
+  const r = await fetch("data/footprints.bin.png", {
     headers: { Range: `bytes=${off}-${off + bytes - 1}` },
   });
   if (!r.ok) throw new Error(`footprint fetch ${r.status}`);

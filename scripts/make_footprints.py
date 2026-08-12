@@ -19,8 +19,14 @@ numpy -- 20 transmitters against every cell in range is seconds, no Spark).
 3,126 transmitters would be 3,126 files. One 14 MB blob with a JSON index of
 byte offsets is one file, and the client fetches only the slice it needs with
 an HTTP Range request -- median 548 records, about 6.5 KB. GitHub Pages
-already serves range requests for `rf.pmtiles`, so this rides on serving
+already serves range requests for the tileset, so this rides on serving
 behaviour the project depends on anyway.
+
+⚠️ The output is `footprints.bin.png` and it is NOT an image. Pages sets
+Content-Type from the extension and gzips application/octet-stream, then
+answers a byte RANGE against the COMPRESSED stream -- which makes every offset
+in the index point at the wrong bytes. `.png` is served identity. See
+docs/data-sources.md and the comment in web/index.html.
 
 Record layout, little-endian, 12 bytes, no padding:
 
@@ -214,7 +220,7 @@ def main() -> int:
         offset += len(chunk)
 
     data = b"".join(blob)
-    (OUT_DIR / "footprints.bin").write_bytes(data)
+    (OUT_DIR / "footprints.bin.png").write_bytes(data)
     (OUT_DIR / "footprints.json").write_text(json.dumps({
         "floor_dbm": FLOOR_DBM,
         "threshold_dbm": threshold,
@@ -227,7 +233,7 @@ def main() -> int:
     # check that the offsets in the index actually address the rows the index
     # claims. An off-by-one-record here paints one transmitter's coverage
     # under another transmitter's name, which looks entirely plausible.
-    on_disk = (OUT_DIR / "footprints.bin").read_bytes()
+    on_disk = (OUT_DIR / "footprints.bin.png").read_bytes()
     for asr in list(index)[::311] + [df["asr_id"].iloc[-1]]:
         off, n, _, _ = index[asr]
         got = unpack(on_disk, off, n)
@@ -238,7 +244,7 @@ def main() -> int:
 
     n_cells = df.groupby("asr_id").size()
     print(f"wrote {len(index):,} transmitter footprints, {len(df):,} records, "
-          f"{len(data) / 1e6:.1f} MB -> {OUT_DIR / 'footprints.bin'}")
+          f"{len(data) / 1e6:.1f} MB -> {OUT_DIR / 'footprints.bin.png'}")
     print(f"  cells per transmitter: median {int(n_cells.median())}, "
           f"p95 {int(n_cells.quantile(0.95))}, max {int(n_cells.max())} "
           f"({int(n_cells.max()) * REC.itemsize / 1024:.0f} KB worst-case fetch)")

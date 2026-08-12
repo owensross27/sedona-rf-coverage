@@ -172,3 +172,42 @@ measuring; the numbers above corrected that.
 | Meta HRSL (`s3://dataforgood-fb-data/hrsl-cogs/`) | Verified and usable, but redundant against ACS at block-group resolution. Retained as a cross-check option. |
 | OpenCellID | The S3 mirror is a PMTiles archive last modified 2024-06; the fresh feed is rate-limited to 2 downloads/day behind a token. |
 | NASADEM, ETH canopy height | No anonymously accessible S3 bucket found for either. |
+
+## Why two files in `web/data/` end in `.png` and are not images
+
+`rf.pmtiles.png` and `footprints.bin.png` are a PMTiles archive and a packed
+binary blob. The suffix is a deployment workaround, and removing it breaks the
+map.
+
+GitHub Pages sets `Content-Type` from the file extension, gzips
+`application/octet-stream`, and then answers a byte `Range` request against the
+**compressed** stream. Measured on a 207,200-byte probe served as `.bin`:
+
+```
+content-range: bytes 0-1023/555
+```
+
+555 is the compressed length. Every offset in a PMTiles archive, and every
+offset in `footprints.json`, is an offset into the **uncompressed** file, so
+each range read lands on the wrong bytes and the client fails with "Server
+returned no content-length header or content-length exceeding request".
+
+The failure is intermittent, which is what made it expensive to find. Responses
+carry `vary: Accept-Encoding`, so `curl` (which sends no `Accept-Encoding`) gets
+a correct `206` with the true total size, while every real browser gets the
+compressed variant. A verification pass done with `curl` says the host is fine.
+
+Probed across extensions on this site, same 207,200-byte payload:
+
+| Extension | Content-Type | Encoding | Range total |
+|---|---|---|---|
+| `.pmtiles`, `.bin`, `.dat` | application/octet-stream | **gzip** | 555 |
+| `.wasm` | application/wasm | **gzip** | 555 |
+| `.png` | image/png | identity | 207,200 |
+| `.gz` | application/gzip | identity | 207,200 |
+| `.woff2` | font/woff2 | identity | 207,200 |
+| `.mp4`, `.webp` | video/mp4, image/webp | identity | 207,200 |
+
+Pages does not let you set response headers, so the extension is the only
+control available. `.png` was chosen because image types are the ones no CDN
+compresses, so this survives a change of host.

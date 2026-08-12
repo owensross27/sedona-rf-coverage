@@ -64,7 +64,7 @@ TC=(tippecanoe --force --no-tile-compression)
   -L towers:"$D/towers.geojsonl" \
   -L sites:"$D/sites.geojsonl"
 
-tile-join --force -o "$D/rf.pmtiles" \
+tile-join --force -o "$D/rf.pmtiles.png" \
   "$TMP/hex5.pmtiles" "$TMP/hex6.pmtiles" "$TMP/hex7.pmtiles" \
   "$TMP/hex8.pmtiles" "$TMP/points.pmtiles"
 
@@ -74,7 +74,7 @@ rm -f "$D"/hex5.geojsonl "$D"/hex6.geojsonl "$D"/hex7.geojsonl \
 # GitHub Pages refuses files over 100 MB, so the size is a hard gate rather
 # than a statistic. If this trips: drop the r8 max zoom, simplify geometry, or
 # split into several PMTiles files (the limit is per file).
-BYTES=$(wc -c < "$D/rf.pmtiles")
-printf '== rf.pmtiles %.1f MB (GitHub Pages limit is 100 MB per file)\n' \
+BYTES=$(wc -c < "$D/rf.pmtiles.png")
+printf '== rf.pmtiles.png %.1f MB (GitHub Pages limit is 100 MB per file)\n' \
   "$(echo "$BYTES" | awk '{print $1/1048576}')"
 [ "$BYTES" -lt 104857600 ] || { echo "ERROR: over the 100 MB Pages limit"; exit 1; }
