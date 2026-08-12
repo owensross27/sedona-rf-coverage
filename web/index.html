@@ -372,15 +372,29 @@ function buildOverlay() {
   });
   map.on("error", e => {
     const msg = String((e && e.error && e.error.message) || (e && e.message) || e);
-    if (!/pmtiles|byte serving|content-length|rf\.pmtiles/i.test(msg)) return;
+    // Keyed on the SOURCE, not on the wording. Matching the message text meant
+    // a 404 on the tileset -- "Bad response code: 404", no mention of pmtiles
+    // or ranges -- sailed straight past and left a blank map with no
+    // explanation, which is the exact failure this banner exists to prevent.
+    // The message test stays only as a fallback for errors that arrive with no
+    // sourceId attached.
+    const mine = (e && e.sourceId === "rf") ||
+                 /pmtiles|byte serving|content-length|rf\.pmtiles/i.test(msg);
+    if (!mine) return;
     if (map.isSourceLoaded("rf")) return;   // already recovered
     const el = document.getElementById("tileerr");
     if (!el || el.style.display === "block") return;
     el.style.display = "block";
     el.innerHTML = `<b>The coverage tiles did not load.</b><br>
       The basemap and the controls are fine; the RF data is missing, so this is
-      an empty map rather than an uncovered state. Usually this means the host
-      answered a byte-range request with the whole file. <br><code>${
+      an empty map rather than an uncovered state.
+      ${/404/.test(msg)
+        ? `<b>Reload the page</b> (Cmd/Ctrl + Shift + R). This page is cached
+           for 10 minutes, so a copy from before a data update can ask for a
+           file that has since been renamed.`
+        : `Usually this means the host answered a byte-range request with the
+           whole file.`}
+      <br><code>${
         msg.replace(/[<>&]/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]))
       }</code>`;
   });
