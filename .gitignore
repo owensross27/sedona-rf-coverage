@@ -66,3 +66,6 @@ web/data/*
 # the page serves, and there is no server here to serve it from.
 !web/data/footprints.bin
 !web/data/footprints.json
+# Temporary: content-type probe for the GitHub Pages gzip/Range problem.
+# Removed once the answer is recorded in docs/.
+!web/_probe/
